@@ -62,13 +62,15 @@ jobs:
             'function Load-TrackedRelayIdentity',
             'function Set-TrackedRelayIdentity',
             'function Clear-TrackedRelayIdentity',
+            'Gameplay hot check: PID + immutable process start time only.',
             'Universal DPS meter capture target: StarSEA',
             'Any compatible DPS meter may independently capture this StarSEA stream.',
             '-ExpectedStartUtc $trackedStart',
             'Not saving ',
             'restored the exact pre-rollback runtime files',
             'Gameplay hot path: once StarSEA is running, status polling must remain tiny.',
-            'reread PID JSON every timer tick',
+            'reread PID JSON',
+            'resolve the executable path every timer tick',
             '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
             "if (`$category -eq 'Private')"
           )
@@ -104,6 +106,11 @@ jobs:
 
           if (-not $text.Contains("$text -match '\"multiplex\"'")) {
             Write-Error 'Self-test no longer guards against multiplexing on the latency path.'
+            exit 1
+          }
+
+          if ($text.Contains('return Test-ExpectedProcess -ProcessId $script:trackedStarPid')) {
+            Write-Error 'Gameplay status polling regressed to repeated executable-path verification.'
             exit 1
           }
 
