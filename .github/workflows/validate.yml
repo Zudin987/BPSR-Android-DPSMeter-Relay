@@ -119,7 +119,7 @@ jobs:
             exit 1
           }
 
-          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'BuildRelease.ps1', 'gh release create')) {
+          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'Require green Validate run for exact commit', '--commit $env:GITHUB_SHA', 'BuildRelease.ps1', 'gh release create')) {
             if (-not $release.Contains($needle)) {
               Write-Error ('Stable release guard is missing: ' + $needle)
               exit 1
