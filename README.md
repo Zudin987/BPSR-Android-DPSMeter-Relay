@@ -1,392 +1,161 @@
-# BPSR Android DPSMeter Relay
+# BPSR Android Relay
 
-A lightweight Windows helper for routing **Blue Protocol: Star Resonance Android traffic** through a PC so compatible packet-based DPS meters can observe a clean `StarSEA.exe` traffic stream.
+A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter.
 
-The relay is intentionally **DPS-meter agnostic**. It does not depend on ZDPS and does not require a specific meter. Any DPS meter that can parse BPSR traffic and can capture/detect the `StarSEA` process/network stream may use the relay. ZDPS is only one example.
-
-The design priorities are intentionally strict:
-
-1. **Lowest practical latency**
-2. **Prevent the same clear BPSR payload from appearing twice on the PC network path**
-3. Convenience/features only after those two goals
-
-## How the universal capture target works
-
-The relay does not create a special virtual network named `StarSEA`. Instead, the Windows relay process itself is named:
-
-```text
-StarSEA.exe
-```
-
-That process owns the clear outbound BPSR connection to the game server. A compatible DPS meter can therefore use `StarSEA` as its process/executable capture target, or observe the same physical-adapter traffic if that meter captures by network device instead.
-
-Multiple compatible DPS meters may run at the same time. The relay does not reserve or lock the capture stream for one application.
-
-## Why the relay is single-process
-
-Older relay designs used two PC proxy processes:
-
-```text
-Android -> front proxy -> localhost bridge -> StarSEA -> game server
-```
-
-That added another proxy hop and could expose a second clear copy of the BPSR payload to packet parsers.
-
-The current gameplay path is:
-
-```text
-Android BPSR
-    |
-    | selected BPSR TCP ports through SFA
-    | encrypted Shadowsocks tunnel
-    v
-StarSEA.exe on PC :10902
-    |
-    | direct clear connection
-    v
-BPSR game server
-```
-
-The phone-to-PC copy is encrypted. The clear BPSR payload appears only on the `StarSEA <-> game server` side, which is the side compatible DPS meters should parse.
-
-This removes the old `BPSRMobileFront.exe` / localhost bridge while keeping a stable universal `StarSEA` capture target.
-
-## Requirements
-
-- Windows 10/11 PC
-- Android phone running BPSR
-- SFA / sing-box-compatible Android client; for the **v1.0 line**, use SFA/sing-box **1.13.x** (1.13.19 is the pinned reference core)
-- one or more compatible DPS meters that can parse BPSR and capture/detect `StarSEA` traffic
-- phone and PC on the same reachable LAN/Wi-Fi
-- Windows network normally set to **Private** for the manager-created firewall rule
-
-You do **not** manually download, rename, or configure sing-box on Windows.
+Current test build: **v1.0.0-rc.10**
 
 ## Quick start
 
-### 1. Open the manager
-
-Download the release ZIP, extract it, and double-click:
+Download the release ZIP, extract it, then open:
 
 ```text
 BPSR Relay Manager.exe
 ```
 
-That EXE is the normal user-facing entry point. It is a tiny open-source Windows launcher that starts the existing manager GUI with the PowerShell console hidden; it does not proxy traffic, stay in the gameplay data path, or bundle sing-box.
+On the **Home** tab, follow these steps:
 
-The manager tries to select the most likely physical Wi-Fi/Ethernet IPv4 automatically. If needed, choose the PC LAN address the phone can reach.
+1. **Prepare Relay** — sets up this PC.
+2. **Allow Firewall** — lets your phone connect to this PC.
+3. **Send to Phone** — import the profile in SFA on Android. Select **BPSR only**.
+4. **DPS Meter** — set your compatible meter to **StarSEA**.
+5. **Start Relay** — then open BPSR and play.
 
-The repository still keeps the BAT launcher as a developer/troubleshooting fallback, but the normal release package is EXE-first so users do not need to open a BAT file.
-
-### 2. `Setup / Repair`
-
-The manager:
-
-- detects Windows x64/ARM64
-- installs the **project-tested** sing-box release instead of blindly taking a new upstream release
-- verifies the official GitHub release SHA256 digest
-- stores a local SHA256 for future integrity checks
-- keeps the previous verified runtime as a rollback when a tested runtime changes
-- creates `StarSEA.exe`
-- creates persistent encrypted relay credentials
-- generates the PC relay configuration
-- generates `output/android-bpsr-relay.json`
-- validates the generated topology
-- runs `sing-box check` on both PC and Android configurations
-- removes obsolete two-process runtime files after successful migration
-
-The current tested runtime is:
+Next time is much easier:
 
 ```text
-sing-box v1.13.19
+Open BPSR Relay Manager.exe -> Start Relay -> Play
 ```
 
-Routine `Setup / Repair` runs reuse the same relay credential, so a runtime repair does not force a new Android import unless the profile itself changes.
+The app has only three pages:
 
-### 3. `Allow Firewall`
+- **Home** — normal setup and daily use.
+- **Details** — logs, report, recovery tools.
+- **Help** — short instructions and common fixes.
 
-Windows asks for Administrator permission once.
+## If something is red
 
-The rule is restricted to:
+Read **What to do next** on the Home page. The app uses short messages such as:
 
-- TCP `10902`
-- selected PC LAN IPv4
-- `LocalSubnet` remote addresses
-- Windows **Private** network profile
-- edge traversal blocked
+- **Needs setup** → click **Prepare Relay**.
+- **Phone Profile: Missing** → click **Prepare Relay**, then **Send to Phone**.
+- **Firewall: Not set** → click **Allow Firewall**.
+- **Old relay found** → close old relay apps or restart the PC.
 
-No router port forwarding is required or recommended. If the active Windows network is Public or DomainAuthenticated, preflight warns instead of claiming this Private-only rule is active.
+For technical details, open **Details**.
 
-### 4. Get the profile onto the phone
+## DPS meter setup
 
-Preferred method: click **Share to Phone**.
-
-The manager starts a temporary local setup page on the same relay port while the gameplay relay is stopped. The URL is copied to the clipboard automatically.
-
-The temporary server:
-
-- has a random 128-bit path token
-- is LAN-bound
-- runs for at most 5 minutes
-- stops after the profile is downloaded
-- never runs during gameplay
-
-You can also use **Show QR (optional)**. The QR rendering button opens QuickChart in your browser; the QR contains only the temporary LAN URL. If you do not want an online QR renderer, use **Copy Phone URL** instead.
-
-Fallback: **Open Profile Folder** and manually transfer:
+The universal capture target is:
 
 ```text
-output/android-bpsr-relay.json
+StarSEA
 ```
 
-Import the JSON into SFA.
+The relay is intentionally **DPS-meter agnostic**. It does not depend on ZDPS or another specific meter. **Any DPS meter that can parse BPSR traffic** and capture/detect the `StarSEA` stream may use it.
 
-In SFA, use per-app / selected-app routing and leave only BPSR selected after testing.
+If your meter asks for a network device, choose the physical Wi-Fi/Ethernet adapter used by this PC.
 
-The generated Android profile intentionally does **not** set `strict_route`. SFA's Android graphical client does not implement that TUN option, so the relay does not rely on it for loop prevention or correctness. The PC relay IP is explicitly excluded from the Android TUN route instead.
-
-### 5. Configure your DPS meter
-
-The universal relay-side target is:
+ZDPS is only an example:
 
 ```text
-Process / executable:
-  StarSEA
-
-Traffic location:
-  the physical PC Wi-Fi/Ethernet adapter used by the relay
+Game Capture Preference: Custom
+Custom BPSR Executable Name: StarSEA
 ```
 
-Exact labels differ between DPS meters. The important part is that the meter observes/parses the clear `StarSEA <-> BPSR server` stream and does **not** try to use an old `BPSRMobileFront` or `BPSRRelayIngress` process.
+## Multiple DPS meters
 
-If a meter captures by executable/process name, use `StarSEA` (normally without `.exe` when the UI expects an executable name). If it captures by network device, select the physical Wi-Fi/Ethernet adapter carrying StarSEA's outbound game traffic.
+**Multiple DPS meters** may run at the same time. Each compatible meter can independently observe the same `StarSEA` game-server stream.
 
-#### ZDPS example
+The anti-double-count design prevents duplicate **relay/network paths**. It does not limit how many meter apps you open.
 
-ZDPS is supported as one example, not as a dependency:
+## Low-latency design
+
+Gameplay uses this path:
 
 ```text
-Network Device:
-  your physical PC Wi-Fi/Ethernet adapter
-
-Game Capture Preference:
-  Custom
-
-Custom BPSR Executable Name:
-  StarSEA
+Android BPSR
+  -> SFA routes only known BPSR TCP ports
+  -> encrypted LAN tunnel
+  -> StarSEA.exe on PC :10902
+  -> BPSR game server
 ```
 
-There is no relay `127.0.0.1:10903` setting in the current architecture.
+Latency and clean capture are the main priorities:
 
-The manager's **Copy DPS Meter Notes** button copies the universal target plus the ZDPS example.
-
-### 6. `PREFLIGHT CHECK`
-
-Before starting, the manager checks:
-
-- selected IP is currently assigned to this PC
-- active sing-box runtime passes its stored SHA256 integrity check
-- whether the runtime is the current project-tested version or a verified rollback
-- `StarSEA.exe` matches the verified active runtime
-- Android profile matches the selected PC IP
-- generated configs pass sing-box validation
-- relay topology remains single-process and encrypted
-- protocol sniffing is absent
-- BPSR port allow-list has not changed unexpectedly
-- PC relay IP is excluded from the Android TUN route
-- no legacy/duplicate relay process exists
-- TCP `10902` is not owned by another process
-- expected Private-profile firewall rule exists
-- current Windows network category
-
-A failed critical check blocks relay startup rather than starting a partial/broken topology.
-
-The **Preflight Check** button is useful when diagnosing setup, but it is not mandatory every day: **START RELAY automatically runs the critical preflight checks before launching StarSEA.**
-
-### 7. `START RELAY`
-
-Normal daily flow after setup is simply:
-
-```text
-Open manager
-    -> START RELAY
-    -> play
-```
-
-The relay runs hidden in the background. Closing the manager window does not stop it; use **STOP RELAY** when you want it stopped.
-
-## Latency choices
-
-The generated path intentionally uses:
-
-- one Windows relay process (`StarSEA.exe`)
+- one Windows gameplay relay process (`StarSEA.exe`)
 - one phone-to-PC proxy hop
-- TCP only for the known BPSR TCP ports
-- Shadowsocks `2022-blake3-aes-128-gcm`
+- direct outbound from StarSEA
 - no proxy multiplexing
-- Android `system` TUN stack
 - no protocol sniff action
-- no unsupported SFA Android `strict_route` setting
-- disabled sing-box runtime logging on the data path
-- direct outbound from StarSEA to the game server
-- direct routing for non-BPSR Android traffic
-- no recurring runtime hashing or network-adapter enumeration by the manager while StarSEA is running
+- TCP only for the known BPSR ports
+- Android `system` TUN stack
+- sing-box data-path logging disabled
+- non-BPSR phone traffic stays direct
+- phone-to-PC BPSR traffic is encrypted, so the PC does not expose a second clear BPSR copy to packet parsers
+- while StarSEA is running, the manager status timer uses the tracked PID/start time only; it does not repeatedly hash binaries, scan adapters, read PID JSON, resolve the executable path, or query firewall/network state
 
-Encryption adds a very small amount of CPU work, but it lets the project remove the old second PC proxy/local bridge and ensures the LAN tunnel does not expose a second clear BPSR payload to packet parsers.
+The user-facing `BPSR Relay Manager.exe` is only a small launcher. It is **not** part of the gameplay/network path and exits after starting the manager UI.
 
-The manager UI can remain open while playing. When it first attaches to a tracked StarSEA process it verifies the executable path and start time once. While the relay is running, the recurring status check uses only the cached PID + immutable process start time; it does not repeatedly hash binaries, enumerate adapters, reread PID JSON, or resolve the executable path. Heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
+## SFA / Android notes
 
-## Routed ports
+For the v1.0 line, use an SFA/sing-box **1.13.x** compatible Android client. The project-tested reference core is **sing-box v1.13.19**.
 
-Only these TCP destination ports are routed through the PC relay:
+The generated Android profile does not use `strict_route`. SFA's Android app **does not implement that TUN option**, so the relay uses the supported PC relay-IP exclusion instead.
+
+Only these BPSR TCP destination ports are routed through the PC relay:
 
 ```text
 15000, 16000, 17000, 18000, 20000, 20001, 21000
 ```
 
-Other Android traffic remains direct.
+## Common problems
 
-## Multiple DPS meters
+### Phone cannot connect
 
-The relay does **not** limit you to one DPS meter application.
+- Phone and PC should be on the same reachable Wi-Fi/LAN.
+- Click **Allow Firewall** again.
+- Make sure the current profile is imported in SFA.
+- In SFA per-app mode, select BPSR.
 
-You can run multiple compatible meters at once. Each meter may independently observe the same `StarSEA` clear game-server stream.
+### DPS meter shows nothing
 
-The anti-double-count protection applies to **duplicate relay/network paths**, not to the number of DPS meter applications you open.
-
-## Stale IP detection
-
-The manager records the PC IP used in the Android profile.
-
-If DHCP changes the PC address, the UI reports the profile as **OUTDATED** instead of just saying the file exists.
-
-Then:
-
-1. choose the current PC IP
-2. run `Setup / Repair`
-3. refresh the firewall rule
-4. re-import/share the updated profile
-
-## Diagnostics
-
-**Copy Diagnostics** produces a privacy-safe report containing items such as:
-
-- manager/runtime versions
-- runtime integrity state
-- selected LAN IP and adapter
-- profile IP match
-- firewall state
-- StarSEA process count
-- legacy relay process count
-- relay-port ownership
-- topology validation
-- routed BPSR ports
-- universal DPS capture target (`StarSEA`)
-
-It intentionally excludes relay passwords/profile secrets.
-
-## Runtime rollback
-
-The manager does not automatically jump to every new sing-box release.
-
-A specific release is promoted as the tested runtime in this repository after validation. When the project later changes that tested version, the previous verified runtime is retained locally and can be restored with **Restore Previous Runtime**.
-
-A verified rollback remains startable after it passes config/topology validation; **Setup / Repair** returns the installation to the current project-tested release.
-
-This avoids turning an upstream proxy update into an unexpected gameplay/network regression.
-
-## Automated validation
-
-The repository's Windows validation workflow checks the release-critical behavior before a stable release can be published:
-
-- Windows PowerShell 5.1 syntax
-- latency/single-count/universal-DPS/SFA invariants
-- generated PC + Android configs against the pinned sing-box runtime
-- no sniff, multiplexing, unsupported Android `strict_route`, or legacy raw SOCKS path
-- encrypted end-to-end relay smoke traffic
-- temporary phone-profile page behavior
-- native `BPSR Relay Manager.exe` launcher compilation and packaged self-test
-- clean end-user ZIP contents and SHA256 generation
-
-The stable release workflow additionally requires a successful **Validate** run for the exact commit being published and an explicit real-device field-test confirmation.
-
-## Files created at runtime
-
-```text
-.runtime/
-  sing-box.exe
-  sing-box-version.txt
-  sing-box-sha256.txt
-  StarSEA.exe
-  relay-credentials.json
-  pids.json
-  manager.log
-  config/
-    starsea-relay.json
-  rollback/
-
-output/
-  android-bpsr-relay.json
-  profile-meta.json
-  README-IMPORT.txt
-```
-
-`.runtime/` and `output/` are ignored by Git.
-
-## Troubleshooting
-
-### BPSR has no network on the phone
-
-Check:
-
-- phone and PC are on the same reachable LAN
-- manager uses the correct PC LAN IPv4
-- Windows network is Private, or you have an equivalent custom firewall rule
-- `Allow Firewall` was run for the current IP
-- the current generated profile is imported/enabled in SFA
-- BPSR is selected in SFA per-app mode
-- relay status says RUNNING
-
-### DPS meter shows no data
-
-First confirm the meter itself supports the current BPSR protocol/data format. Then check that it is observing `StarSEA` or the physical adapter carrying StarSEA's outbound game traffic.
-
-For ZDPS specifically:
-
-```text
-Network Device: physical Wi-Fi/Ethernet adapter
-Game Capture Preference: Custom
-Custom BPSR Executable Name: StarSEA
-```
-
-Then run **Copy Diagnostics** and **Preflight Check**.
+- Set the meter to `StarSEA`.
+- If it asks for Network Device, choose your physical Wi-Fi/Ethernet adapter.
+- The meter itself must support the current BPSR protocol/data format.
 
 ### DPS is exactly doubled
 
-The current relay should not expose two clear copies of the BPSR payload on the PC network path: the phone-to-PC leg is encrypted.
+The current design exposes only one clear BPSR game-server path. Close any old `BPSRMobileFront`, `BPSRRelayIngress`, or foreign `StarSEA` relay process. **Run Check** will detect these conditions.
 
-Still verify that you are using the current single-process build and there are no old `BPSRMobileFront`, `BPSRRelayIngress`, or foreign `StarSEA` processes running. Preflight blocks these conditions.
+### Old relay found
 
-Opening two different DPS meters is not, by itself, a duplicate-relay condition; each meter can independently consume the same StarSEA stream.
+Close the old relay app/process. If unsure, restart the PC and open the new manager again.
 
-### Setup says a foreign/legacy relay exists
+## Safety and package contents
 
-The manager deliberately refuses to kill an untracked process just because it has a familiar name. Close the old relay manually, then retry.
+The release is **EXE-first**: normal users open `BPSR Relay Manager.exe`.
 
-## Safety / transparency
+The release ZIP contains the small launcher plus the manager scripts. It does **not** bundle `sing-box.exe`, `StarSEA.exe`, relay credentials, PID state, or generated phone profiles.
 
-- the release package contains one small user-facing `BPSR Relay Manager.exe` launcher; it does not contain sing-box or `StarSEA.exe`
-- no sing-box executable is committed to this repository
-- only the pinned tested official SagerNet release is downloaded by Setup
-- the official GitHub asset SHA256 digest is mandatory
-- extracted runtime integrity is recorded and checked later
-- generated JSON is UTF-8 without BOM
-- relay credentials remain local under `.runtime/`
-- profile sharing is temporary and is not active during gameplay
-- the manager refuses duplicate/legacy relay process states
-- STOP RELAY verifies the expected executable path/start state before terminating the tracked process
-- a failed runtime rollback attempts to restore the exact pre-rollback runtime files
+**Prepare Relay** downloads only the pinned official SagerNet sing-box release and requires its official SHA256 digest to match before use.
+
+Runtime files stay local under `.runtime/`. Generated phone files stay under `output/`.
+
+## Release status
+
+RC.10 is an automated-test release candidate, not the stable v1.0.0 release yet.
+
+Before stable release, a real Android + Windows test still needs to confirm:
+
+- `BPSR Relay Manager.exe` opens normally
+- SFA imports and starts the generated profile
+- BPSR connects and plays normally
+- gameplay latency is acceptable
+- at least one compatible DPS meter reads/parses `StarSEA` correctly
+- DPS is not doubled
+
+After that live test passes, the source version can be changed to `1.0.0`, final CI must pass on the exact commit, PR #1 can be merged, and the guarded stable Release workflow can publish the ZIP + SHA256.
 
 ## Disclaimer
 
-This is an unofficial community helper and is not affiliated with, endorsed by, or supported by the BPSR developers/publisher, any DPS-meter project, SagerNet, sing-box, or QuickChart. ZDPS is mentioned only as a configuration example.
+This is an unofficial community helper. It is not affiliated with or endorsed by the BPSR developers/publisher, any DPS-meter project, SagerNet, sing-box, or QuickChart.
