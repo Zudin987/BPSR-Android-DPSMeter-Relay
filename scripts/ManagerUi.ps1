@@ -675,6 +675,19 @@ $helpTab.Controls.Add($problemHelp)
 
 # Lightweight UI layout self-test for CI. It does not open a window or start the relay.
 if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
+    # WinForms does not fully size dormant TabPages until they are selected/laid out.
+    # Materialize each page before checking bounds so CI measures the rendered geometry.
+    [void]$form.CreateControl()
+    foreach ($page in @($homeTab, $detailsTab, $helpTab)) {
+        $tabs.SelectedTab = $page
+        [void]$page.CreateControl()
+        $page.PerformLayout()
+        $tabs.PerformLayout()
+        $form.PerformLayout()
+    }
+    $tabs.SelectedTab = $homeTab
+    $form.PerformLayout()
+
     function Assert-Inside {
         param($Control, $Parent, [string]$Name)
         if ($Control.Left -lt 0 -or $Control.Top -lt 0 -or $Control.Right -gt $Parent.ClientSize.Width -or $Control.Bottom -gt $Parent.ClientSize.Height) {
