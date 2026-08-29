@@ -55,7 +55,7 @@ This removes the old `BPSRMobileFront.exe` / localhost bridge while keeping a st
 
 - Windows 10/11 PC
 - Android phone running BPSR
-- SFA / sing-box-compatible Android client
+- SFA / sing-box-compatible Android client; for the release candidate, use SFA/sing-box **1.13.x** (1.13.19 is the pinned reference core)
 - one or more compatible DPS meters that can parse BPSR and capture/detect `StarSEA` traffic
 - phone and PC on the same reachable LAN/Wi-Fi
 - Windows network normally set to **Private** for the manager-created firewall rule
@@ -141,6 +141,8 @@ Import the JSON into SFA.
 
 In SFA, use per-app / selected-app routing and leave only BPSR selected after testing.
 
+The generated Android profile intentionally does **not** set `strict_route`. SFA's Android graphical client does not implement that TUN option, so the relay does not rely on it for loop prevention or correctness. The PC relay IP is explicitly excluded from the Android TUN route instead.
+
 ### 5. Configure your DPS meter
 
 The universal relay-side target is:
@@ -222,6 +224,7 @@ The generated path intentionally uses:
 - no proxy multiplexing
 - Android `system` TUN stack
 - no protocol sniff action
+- no unsupported SFA Android `strict_route` setting
 - disabled sing-box runtime logging on the data path
 - direct outbound from StarSEA to the game server
 - direct routing for non-BPSR Android traffic
@@ -229,7 +232,7 @@ The generated path intentionally uses:
 
 Encryption adds a very small amount of CPU work, but it lets the project remove the old second PC proxy/local bridge and ensures the LAN tunnel does not expose a second clear BPSR payload to packet parsers.
 
-The manager UI can remain open while playing. Its live status path only checks the tracked StarSEA process state; heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
+The manager UI can remain open while playing. Its live status path uses an in-memory tracked StarSEA identity and only checks process state; it does not repeatedly hash binaries, enumerate adapters, or reread the PID JSON while the relay is running. Heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
 
 ## Routed ports
 
