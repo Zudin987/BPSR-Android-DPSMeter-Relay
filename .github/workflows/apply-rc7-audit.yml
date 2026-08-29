@@ -1,0 +1,40 @@
+name: Apply RC7 Audit Patch
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - '.github/workflows/apply-rc7-audit.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/user-friendly-manager
+
+      - name: Apply audited RC7 changes
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyRc7AuditPatch.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit audited changes
+        shell: powershell
+        run: |
+          git config user.name "MrEz"
+          git config user.email "39240221+Zudin987@users.noreply.github.com"
+          git add -- 'scripts/BPSRRelayManager.ps1' 'README.md' '.github/workflows/validate.yml'
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Harden RC7 SFA compatibility and gameplay polling"
+            git push origin HEAD:feature/user-friendly-manager
+          }
