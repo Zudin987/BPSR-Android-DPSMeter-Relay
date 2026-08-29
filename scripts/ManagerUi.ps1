@@ -688,10 +688,19 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     $tabs.SelectedTab = $homeTab
     $form.PerformLayout()
 
+    function Get-LayoutSize {
+        param($Parent)
+        if ($Parent -is [System.Windows.Forms.TabPage]) {
+            return $tabs.DisplayRectangle.Size
+        }
+        return $Parent.ClientSize
+    }
+
     function Assert-Inside {
         param($Control, $Parent, [string]$Name)
-        if ($Control.Left -lt 0 -or $Control.Top -lt 0 -or $Control.Right -gt $Parent.ClientSize.Width -or $Control.Bottom -gt $Parent.ClientSize.Height) {
-            throw ('UI layout overflow: ' + $Name)
+        $layoutSize = Get-LayoutSize -Parent $Parent
+        if ($Control.Left -lt 0 -or $Control.Top -lt 0 -or $Control.Right -gt $layoutSize.Width -or $Control.Bottom -gt $layoutSize.Height) {
+            throw ('UI layout overflow: ' + $Name + ' (control=' + $Control.Bounds + ', parent=' + $layoutSize + ')')
         }
     }
 
@@ -751,6 +760,30 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
     if ($targetValue.Text -ne 'StarSEA') { throw 'DPS target card changed unexpectedly.' }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:BPSR_RELAY_UI_CAPTURE_DIR)) {
+        $captureDir = $env:BPSR_RELAY_UI_CAPTURE_DIR
+        New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
+        foreach ($entry in @(
+            @($homeTab, 'home.png'),
+            @($detailsTab, 'details.png'),
+            @($helpTab, 'help.png')
+        )) {
+            $tabs.SelectedTab = $entry[0]
+            $form.PerformLayout()
+            $tabs.PerformLayout()
+            $entry[0].PerformLayout()
+            [System.Windows.Forms.Application]::DoEvents()
+            $bitmap = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height)
+            try {
+                $form.DrawToBitmap($bitmap, $form.ClientRectangle)
+                $bitmap.Save((Join-Path $captureDir $entry[1]), [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally { $bitmap.Dispose() }
+        }
+        $tabs.SelectedTab = $homeTab
+        Write-Host ('UI preview PNGs saved to ' + $captureDir)
+    }
 
     Write-Host 'UI SELF-TEST PASS: Home/Details/Help fit, key labels have measured text room, simple actions present, StarSEA target visible.'
     return
