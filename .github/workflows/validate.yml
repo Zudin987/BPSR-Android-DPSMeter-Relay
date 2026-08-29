@@ -39,6 +39,7 @@ jobs:
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
+          $readme = Get-Content 'README.md' -Raw
           $bat = Get-Content 'BPSR Relay Manager.bat' -Raw
           $release = Get-Content '.github\workflows\release.yml' -Raw
 
@@ -58,7 +59,8 @@ jobs:
             'function Get-DiagnosticsText',
             'function Start-ProfileShare',
             'function Restore-PreviousRuntime',
-            'Custom BPSR Executable Name: StarSEA',
+            'Universal DPS meter capture target: StarSEA',
+            'Any compatible DPS meter may independently capture this StarSEA stream.',
             '-ExpectedStartUtc $trackedStart',
             'Not saving ',
             'restored the exact pre-rollback runtime files',
@@ -74,6 +76,13 @@ jobs:
             }
           }
 
+          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters')) {
+            if (-not $readme.Contains($needle)) {
+              Write-Error ('Universal DPS-meter documentation invariant is missing: ' + $needle)
+              exit 1
+            }
+          }
+
           if ($text.Contains("[ordered]@{ action = 'sniff' }")) {
             Write-Error 'Protocol sniff action was reintroduced into the generated Android path.'
             exit 1
@@ -84,14 +93,14 @@ jobs:
             exit 1
           }
 
-          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'BuildRelease.ps1', 'gh release create')) {
+          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'BuildRelease.ps1', 'gh release create')) {
             if (-not $release.Contains($needle)) {
               Write-Error ('Stable release guard is missing: ' + $needle)
               exit 1
             }
           }
 
-          Write-Host 'Static latency/single-count/safety/release-gate invariants present.'
+          Write-Host 'Static latency/single-count/universal-DPS/safety/release-gate invariants present.'
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
