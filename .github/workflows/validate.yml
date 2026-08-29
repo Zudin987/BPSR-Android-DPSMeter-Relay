@@ -35,12 +35,14 @@ jobs:
             Write-Host ($relative + ' syntax OK.')
           }
 
-      - name: Check latency and single-count invariants
+      - name: Check latency, UX and single-count invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
           $readme = Get-Content 'README.md' -Raw
           $bat = Get-Content 'BPSR Relay Manager.bat' -Raw
+          $launcher = Get-Content 'launcher\BPSRRelayManagerLauncher.cs' -Raw
+          $builder = Get-Content 'scripts\BuildRelease.ps1' -Raw
           $release = Get-Content '.github\workflows\release.yml' -Raw
 
           $required = @(
@@ -82,9 +84,9 @@ jobs:
             }
           }
 
-          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option')) {
+          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option', 'BPSR Relay Manager.exe', 'EXE-first')) {
             if (-not $readme.Contains($needle)) {
-              Write-Error ('Universal DPS/SFA documentation invariant is missing: ' + $needle)
+              Write-Error ('Universal DPS/SFA/UX documentation invariant is missing: ' + $needle)
               exit 1
             }
           }
@@ -115,8 +117,28 @@ jobs:
           }
 
           if (-not $bat.Contains('scripts\LaunchManager.ps1')) {
-            Write-Error 'Top-level BAT no longer uses the startup-error wrapper.'
+            Write-Error 'Repository BAT fallback no longer uses the startup-error wrapper.'
             exit 1
+          }
+
+          foreach ($needle in @('ProcessStartInfo', 'powershell.exe', '--launcher-self-test', 'CreateNoWindow = true', 'scripts')) {
+            if (-not $launcher.Contains($needle)) {
+              Write-Error ('Native launcher invariant is missing: ' + $needle)
+              exit 1
+            }
+          }
+          foreach ($forbidden in @('10902', '2022-blake3-aes-128-gcm', 'sing-box', 'StarSEA.exe')) {
+            if ($launcher.Contains($forbidden)) {
+              Write-Error ('Native launcher must stay out of relay/network logic; found: ' + $forbidden)
+              exit 1
+            }
+          }
+
+          foreach ($needle in @('BPSR Relay Manager.exe', '/target:winexe', '--launcher-self-test', 'must contain exactly one executable', "EntryPoint = 'BPSR Relay Manager.exe'")) {
+            if (-not $builder.Contains($needle)) {
+              Write-Error ('EXE-first package guard is missing: ' + $needle)
+              exit 1
+            }
           }
 
           foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'Require green Validate run for exact commit', '--commit $env:GITHUB_SHA', 'BuildRelease.ps1', 'gh release create')) {
@@ -126,7 +148,7 @@ jobs:
             }
           }
 
-          Write-Host 'Static latency/single-count/universal-DPS/SFA/safety/release-gate invariants present.'
+          Write-Host 'Static latency/single-count/universal-DPS/SFA/EXE-UX/safety/release-gate invariants present.'
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
@@ -204,7 +226,7 @@ jobs:
             }
           }
 
-      - name: Build and verify clean release package
+      - name: Build and verify EXE-first release package
         shell: powershell
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
@@ -215,6 +237,36 @@ jobs:
           if ($zips.Count -ne 1 -or $hashes.Count -ne 1) {
             throw 'Expected exactly one release ZIP and one SHA256 file.'
           }
+
+          $verify = Join-Path $env:RUNNER_TEMP 'bpsr-release-exe-check'
+          if (Test-Path -LiteralPath $verify) { Remove-Item -LiteralPath $verify -Recurse -Force }
+          Expand-Archive -LiteralPath $zips[0].FullName -DestinationPath $verify -Force
+          $archiveRoot = @(Get-ChildItem -LiteralPath $verify -Directory)[0]
+          if (-not $archiveRoot) { throw 'Release ZIP has no package root directory.' }
+
+          $launcherExe = Join-Path $archiveRoot.FullName 'BPSR Relay Manager.exe'
+          if (-not (Test-Path -LiteralPath $launcherExe -PathType Leaf)) {
+            throw 'Release ZIP does not expose BPSR Relay Manager.exe as the user entry point.'
+          }
+          if (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'BPSR Relay Manager.bat')) {
+            throw 'Legacy BAT is still exposed as a release-package root entry point.'
+          }
+
+          $exeFiles = @(Get-ChildItem -LiteralPath $archiveRoot.FullName -Filter '*.exe' -File -Recurse)
+          if ($exeFiles.Count -ne 1 -or $exeFiles[0].Name -ne 'BPSR Relay Manager.exe') {
+            throw ('Release ZIP must contain exactly one EXE launcher; found: ' + (($exeFiles.FullName) -join ', '))
+          }
+
+          $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($launcherExe)
+          if ($versionInfo.ProductName -ne 'BPSR Android DPSMeter Relay') {
+            throw ('Unexpected launcher ProductName: ' + $versionInfo.ProductName)
+          }
+
+          & $launcherExe '--launcher-self-test'
+          if ($LASTEXITCODE -ne 0) {
+            throw ('Packaged native launcher self-test failed: ' + $LASTEXITCODE)
+          }
+          Write-Host 'EXE-first package and native launcher probe passed.'
 
       - name: Upload validated release candidate package
         uses: actions/upload-artifact@v4
