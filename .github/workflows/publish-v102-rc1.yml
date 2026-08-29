@@ -1,0 +1,104 @@
+name: Publish v1.0.2-rc.1
+
+on:
+  push:
+    branches:
+      - fix/firewall-verification-v1.0.2
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 65bde8abda2b9ae4dede64f538dd22a34287d250
+      TAG: v1.0.2-rc.1
+    steps:
+      - name: Checkout exact validated source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact hotfix source
+        shell: powershell
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'Checkout is not the intended source commit.' }
+          $text = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
+          foreach ($needle in @(
+            "`$ManagerVersion = '1.0.2-rc.1'",
+            "'TCP' { @('TCP', '6') }",
+            "'UDP' { @('UDP', '17') }",
+            'Test-FirewallProfileIsPrivate',
+            'Test-FirewallLocalSubnetScope',
+            '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
+            "server = '127.0.0.1'",
+            "final = 'bpsr-pc'"
+          )) {
+            if (-not $text.Contains($needle)) { throw ('Missing release invariant: ' + $needle) }
+          }
+          if ($text.Contains("type = 'shadowsocks'") -or $text.Contains('multiplex')) { throw 'Forbidden relay transport change detected.' }
+
+      - name: Run source self-test
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Smoke-test relay
+        shell: powershell
+        run: |
+          $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\TestRelaySmoke.ps1' -SingBoxExe $singBox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build prerelease package
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path '.\dist\BPSR-Android-DPSMeter-Relay.zip')) { throw 'ZIP missing.' }
+          if (-not (Test-Path '.\dist\BPSR-Android-DPSMeter-Relay.zip.sha256')) { throw 'Checksum missing.' }
+          Get-Content '.\dist\BPSR-Android-DPSMeter-Relay.zip.sha256'
+
+      - name: Publish prerelease
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $existing = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) { throw ($env:TAG + ' already exists; refusing to overwrite it.') }
+
+          @'
+          ## Firewall verification hotfix
+
+          This release candidate fixes a false **Windows could not allow the phone connection** error that can occur after Windows successfully creates the relay firewall rules but reports NetSecurity values in a different representation.
+
+          The verifier now accepts Windows protocol values as either TCP/UDP or IANA 6/17, and Private profile as its friendly or numeric representation.
+
+          Security scope is unchanged:
+          - Private network only
+          - selected PC LAN IP only
+          - LocalSubnet only
+          - TCP + UDP port 10808 only
+          - Edge traversal blocked
+
+          Relay topology is unchanged from v1.0.1:
+          Android/SFA -> BPSRMobileFront -> localhost StarSEA -> game server.
+
+          This is a prerelease because the firewall interaction still needs a real Windows + phone field test before promotion to stable v1.0.2.
+          '@ | Set-Content -LiteralPath release-notes.md -Encoding UTF8
+
+          gh release create $env:TAG `
+            '.\dist\BPSR-Android-DPSMeter-Relay.zip' `
+            '.\dist\BPSR-Android-DPSMeter-Relay.zip.sha256' `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:SOURCE_SHA `
+            --title 'BPSR Android DPSMeter Relay v1.0.2-rc.1' `
+            --notes-file release-notes.md `
+            --prerelease
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json tagName,isPrerelease,targetCommitish,url,assets
