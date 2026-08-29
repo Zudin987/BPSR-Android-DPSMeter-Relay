@@ -29,10 +29,6 @@ jobs:
           manager_path = Path('scripts/BPSRRelayManager.ps1')
           text = manager_path.read_text(encoding='utf-8')
 
-          old_marker = "function Test-FirewallReady {"
-          if old_marker not in text:
-              raise SystemExit('Test-FirewallReady function not found')
-
           replacement = r'''function Test-FirewallProfileIsPrivate {
               param($Value)
 
@@ -121,8 +117,8 @@ jobs:
                                   continue
                               }
 
-                              # NetSecurity may expose Protocol as TCP/UDP strings or
-                              # IANA protocol numbers (6/17), depending on Windows build.
+                              # Windows NetSecurity may expose Protocol as either
+                              # TCP/UDP names or IANA numbers 6/17.
                               if (Test-FirewallProtocolMatches -Value $port.Protocol -Expected 'TCP') { $tcpReady = $true }
                               if (Test-FirewallProtocolMatches -Value $port.Protocol -Expected 'UDP') { $udpReady = $true }
                           }
@@ -147,9 +143,8 @@ jobs:
           selftest_anchor = "    if ($sourceText -notmatch 'Protocol UDP') {\n        throw 'Self-test found missing UDP trusted-LAN firewall rule.'\n    }\n"
           selftest_extra = selftest_anchor + r'''
 
-              # Windows NetSecurity is not consistent about whether Protocol/Profile
-              # are surfaced as friendly names or numeric enum values. Both forms must
-              # validate without widening the Private-LAN rule scope.
+              # Accept Windows' friendly and numeric representations, but do not
+              # accept broader profiles/scopes such as Any.
               if (-not (Test-FirewallProfileIsPrivate -Value 'Private') -or
                   -not (Test-FirewallProfileIsPrivate -Value '2') -or
                   (Test-FirewallProfileIsPrivate -Value 'Any')) {
@@ -172,31 +167,19 @@ jobs:
               raise SystemExit('Self-test firewall anchor not found')
           text = text.replace(selftest_anchor, selftest_extra, 1)
           manager_path.write_text(text, encoding='utf-8', newline='')
-
-          validate_path = Path('.github/workflows/validate.yml')
-          validate = validate_path.read_text(encoding='utf-8')
-          validate = validate.replace('v1.0.1', 'v1.0.2-rc.1')
-          validate = validate.replace("`$ManagerVersion = '1.0.1'", "`$ManagerVersion = '1.0.2-rc.1'")
-
-          required_anchor = "            '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',\n"
-          required_extra = required_anchor + "            'function Test-FirewallProtocolMatches',\n            \"@('TCP', '6')\",\n            \"@('UDP', '17')\",\n            'function Test-FirewallProfileIsPrivate',\n            'function Test-FirewallLocalSubnetScope',\n"
-          if required_anchor not in validate:
-              raise SystemExit('Validate firewall invariant anchor not found')
-          validate = validate.replace(required_anchor, required_extra, 1)
-          validate_path.write_text(validate, encoding='utf-8', newline='')
           PY
 
       - name: Review patch
         shell: bash
         run: |
           git diff --check
-          git diff -- scripts/BPSRRelayManager.ps1 .github/workflows/validate.yml
+          git diff -- scripts/BPSRRelayManager.ps1
 
-      - name: Commit hotfix
+      - name: Commit hotfix source
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/BPSRRelayManager.ps1 .github/workflows/validate.yml
+          git add scripts/BPSRRelayManager.ps1
           git commit -m 'Fix Windows firewall rule verification'
           git push origin HEAD:fix/firewall-verification-v1.0.2
