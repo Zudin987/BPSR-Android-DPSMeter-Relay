@@ -44,6 +44,7 @@ This removes the old `BPSRMobileFront.exe` / localhost bridge entirely while ret
 - SFA / sing-box-compatible Android client
 - ZDPS or another compatible DPS meter on the PC
 - Phone and PC on the same reachable LAN/Wi-Fi
+- Windows network normally set to **Private** for the manager-created firewall rule
 
 You do **not** manually download, rename, or configure sing-box on Windows.
 
@@ -58,6 +59,8 @@ BPSR Relay Manager.bat
 ```
 
 The manager tries to select the most likely physical Wi-Fi/Ethernet IPv4 automatically. If needed, choose the PC LAN address the phone can reach.
+
+A small launcher wrapper keeps the PowerShell console hidden during normal use but shows a visible error dialog if the manager fails before its UI can open.
 
 ### 2. `Setup / Repair`
 
@@ -96,7 +99,7 @@ The rule is restricted to:
 - Windows **Private** network profile
 - edge traversal blocked
 
-No router port forwarding is required or recommended.
+No router port forwarding is required or recommended. If the active Windows network is Public or DomainAuthenticated, preflight warns instead of claiming this Private-only rule is active.
 
 ### 4. Get the profile onto the phone
 
@@ -150,8 +153,9 @@ The manager has **Copy ZDPS Settings** to copy these settings.
 Before starting, the manager checks:
 
 - selected IP is currently assigned to this PC
-- tested sing-box runtime is present and hash-valid
-- `StarSEA.exe` matches the verified runtime
+- active sing-box runtime passes its stored SHA256 integrity check
+- whether the runtime is the current project-tested version or a verified rollback
+- `StarSEA.exe` matches the verified active runtime
 - Android profile matches the selected PC IP
 - generated configs pass sing-box validation
 - relay topology remains single-process and encrypted
@@ -160,10 +164,12 @@ Before starting, the manager checks:
 - PC relay IP is excluded from the Android TUN route
 - no legacy/duplicate relay process exists
 - TCP `10902` is not owned by another process
-- expected firewall rule exists
+- expected Private-profile firewall rule exists
 - current Windows network category
 
 A failed critical check blocks relay startup rather than starting a partial/broken topology.
+
+The **Preflight Check** button is useful when diagnosing setup, but it is not mandatory every day: **START RELAY automatically runs the critical preflight checks before launching StarSEA.**
 
 ### 7. `START RELAY`
 
@@ -191,8 +197,11 @@ The generated path intentionally uses:
 - disabled sing-box runtime logging on the data path
 - direct outbound from StarSEA to the game server
 - direct routing for non-BPSR Android traffic
+- no recurring runtime hashing or network-adapter enumeration by the manager while StarSEA is running
 
 Encryption adds a very small amount of CPU work, but it lets the project remove the old second PC proxy/local bridge and ensures the LAN tunnel does not expose a second clear BPSR payload to packet parsers.
+
+The manager UI can remain open while playing. Its live status path only checks the tracked StarSEA process state; heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
 
 ## Routed ports
 
@@ -247,6 +256,8 @@ It intentionally excludes relay passwords/profile secrets.
 The manager does not automatically jump to every new sing-box release.
 
 A specific release is promoted as the tested runtime in this repository after validation. When the project later changes that tested version, the previous verified runtime is retained locally and can be restored with **Restore Previous Runtime**.
+
+A verified rollback remains startable after it passes config/topology validation; **Setup / Repair** returns the installation to the current project-tested release.
 
 This avoids turning an upstream proxy update into an unexpected gameplay/network regression.
 
@@ -320,6 +331,7 @@ The manager deliberately refuses to kill an untracked process just because it ha
 - profile sharing is temporary and is not active during gameplay
 - the manager refuses duplicate/legacy relay process states
 - STOP RELAY verifies the expected executable path/start state before terminating the tracked process
+- a failed runtime rollback attempts to restore the exact pre-rollback runtime files
 
 ## Disclaimer
 
