@@ -33,7 +33,8 @@ $newText = $prefix + $tail + [Environment]::NewLine
 
 # Verify the edit itself before allowing a commit.
 $verify = Get-Content -LiteralPath $managerPath -Raw
-if (-not $verify.Contains("$UiScript = Join-Path $PSScriptRoot 'ManagerUi.ps1'")) {
+$expectedWiring = '$UiScript = Join-Path $PSScriptRoot ''ManagerUi.ps1'''
+if (-not $verify.Contains($expectedWiring)) {
     throw 'Manager UI module wiring was not written.'
 }
 if ($verify.Contains('New-Object System.Windows.Forms.Form')) {
