@@ -40,6 +40,7 @@ jobs:
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
           $bat = Get-Content 'BPSR Relay Manager.bat' -Raw
+          $release = Get-Content '.github\workflows\release.yml' -Raw
 
           $required = @(
             '$TestedSingBoxVersion',
@@ -83,7 +84,14 @@ jobs:
             exit 1
           }
 
-          Write-Host 'Static latency/single-count/safety invariants present.'
+          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'BuildRelease.ps1', 'gh release create')) {
+            if (-not $release.Contains($needle)) {
+              Write-Error ('Stable release guard is missing: ' + $needle)
+              exit 1
+            }
+          }
+
+          Write-Host 'Static latency/single-count/safety/release-gate invariants present.'
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
@@ -101,10 +109,19 @@ jobs:
       - name: Test temporary phone profile server
         shell: powershell
         run: |
+          function Get-FreeTcpPort {
+            $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+            try {
+              $listener.Start()
+              return [int]$listener.LocalEndpoint.Port
+            }
+            finally { $listener.Stop() }
+          }
+
           $profile = Join-Path $env:RUNNER_TEMP 'android-bpsr-relay.json'
           '{"test":true}' | Set-Content -Path $profile -Encoding ASCII
           $token = '0123456789abcdef0123456789abcdef'
-          $port = 10992
+          $port = Get-FreeTcpPort
           $args = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $env:GITHUB_WORKSPACE 'scripts\ServeProfile.ps1') + '"' +
                   ' -BindIp 127.0.0.1 -Port ' + $port +
                   ' -Token ' + $token +
