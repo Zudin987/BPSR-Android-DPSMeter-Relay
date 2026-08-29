@@ -764,24 +764,36 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if (-not [string]::IsNullOrWhiteSpace($env:BPSR_RELAY_UI_CAPTURE_DIR)) {
         $captureDir = $env:BPSR_RELAY_UI_CAPTURE_DIR
         New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
-        foreach ($entry in @(
-            @($homeTab, 'home.png'),
-            @($detailsTab, 'details.png'),
-            @($helpTab, 'help.png')
-        )) {
-            $tabs.SelectedTab = $entry[0]
-            $form.PerformLayout()
-            $tabs.PerformLayout()
-            $entry[0].PerformLayout()
-            [System.Windows.Forms.Application]::DoEvents()
-            $bitmap = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height)
-            try {
-                $form.DrawToBitmap($bitmap, $form.ClientRectangle)
-                $bitmap.Save((Join-Path $captureDir $entry[1]), [System.Drawing.Imaging.ImageFormat]::Png)
+        $form.ShowInTaskbar = $false
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $form.Location = New-Object System.Drawing.Point(0, 0)
+        $form.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Update-Status
+            foreach ($entry in @(
+                @($homeTab, 'home.png'),
+                @($detailsTab, 'details.png'),
+                @($helpTab, 'help.png')
+            )) {
+                $tabs.SelectedTab = $entry[0]
+                $form.PerformLayout()
+                $tabs.PerformLayout()
+                $entry[0].PerformLayout()
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 150
+                $bitmap = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height)
+                try {
+                    $form.DrawToBitmap($bitmap, $form.ClientRectangle)
+                    $bitmap.Save((Join-Path $captureDir $entry[1]), [System.Drawing.Imaging.ImageFormat]::Png)
+                }
+                finally { $bitmap.Dispose() }
             }
-            finally { $bitmap.Dispose() }
+            $tabs.SelectedTab = $homeTab
         }
-        $tabs.SelectedTab = $homeTab
+        finally {
+            $form.Hide()
+        }
         Write-Host ('UI preview PNGs saved to ' + $captureDir)
     }
 
