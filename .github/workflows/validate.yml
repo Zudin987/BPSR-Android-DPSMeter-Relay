@@ -104,7 +104,7 @@ jobs:
             exit 1
           }
 
-          if (-not $text.Contains("$text -match '\"multiplex\"'")) {
+          if (-not $text.Contains('Self-test found multiplexing on the latency path.')) {
             Write-Error 'Self-test no longer guards against multiplexing on the latency path.'
             exit 1
           }
