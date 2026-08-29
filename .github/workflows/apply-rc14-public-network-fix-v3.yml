@@ -1,0 +1,305 @@
+name: Apply RC14 Public Network Fix v3
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - .github/workflows/apply-rc14-public-network-fix-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/user-friendly-manager
+          fetch-depth: 0
+
+      - name: Apply RC14 fix robustly
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8', newline='\n')
+
+          def sub_one(text, pattern, replacement, label, flags=re.M | re.S):
+              out, n = re.subn(pattern, lambda m: replacement, text, count=1, flags=flags)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 regex match, found {n}')
+              return out
+
+          engine_path = 'scripts/BPSRRelayManager.ps1'
+          ui_path = 'scripts/ManagerUi.ps1'
+          engine = read(engine_path)
+          ui = read(ui_path)
+
+          if engine.count("$ManagerVersion = '1.0.0-rc.13'") != 1:
+              raise SystemExit('Unexpected manager version source state')
+          engine = engine.replace("$ManagerVersion = '1.0.0-rc.13'", "$ManagerVersion = '1.0.0-rc.14'", 1)
+
+          # Firewall readiness must mean the rule is usable on the active selected network.
+          engine = sub_one(
+              engine,
+              r"function Test-FirewallReady \{.*?\n\}\n\nfunction Allow-Firewall \{",
+              r'''function Test-FirewallReady {
+              param([string]$PcIp)
+              if ((Get-NetworkCategoryForIp -Address $PcIp) -ne 'Private') { return $false }
+              try {
+                  $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue | Where-Object {
+                      $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $_.Profile -match 'Private'
+                  })
+                  foreach ($rule in $rules) {
+                      $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+                      $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+                      if ($port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort -and
+                          [string]$addr.LocalAddress -eq $PcIp -and [string]$addr.RemoteAddress -eq 'LocalSubnet') {
+                          return $true
+                      }
+                  }
+              }
+              catch {}
+              return $false
+          }
+
+          function Allow-Firewall {''',
+              'Test-FirewallReady block'
+          )
+
+          engine = sub_one(
+              engine,
+              r"function Allow-Firewall \{.*?\n\}\n\nfunction Remove-LegacyRuntimeFiles \{",
+              r'''function Allow-Firewall {
+              $pcIp = Get-SelectedIp
+              $adapter = Get-InterfaceForIp -Address $pcIp
+              if (-not $adapter) { throw 'Could not find the selected Windows network adapter.' }
+
+              $category = Get-NetworkCategoryForIp -Address $pcIp
+              if ($category -eq 'Public') {
+                  $choice = [System.Windows.Forms.MessageBox]::Show(
+                      "This Windows network is Public.`r`n`r`nThe relay only opens on a Private LAN for safety.`r`n`r`nOnly continue if this is your trusted home/private network.`r`n`r`nChange it to Private and allow your phone to connect?",
+                      'Trusted network required',
+                      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                      [System.Windows.Forms.MessageBoxIcon]::Warning
+                  )
+                  if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+                      Add-Log 'Firewall setup cancelled because the active network is Public.'
+                      Update-Status
+                      return
+                  }
+              }
+              elseif ($category -ne 'Private') {
+                  throw ('Windows network profile is ' + $category + '. The relay requires a Private network profile.')
+              }
+
+              Ensure-Directories
+              $profileCommand = ''
+              if ($category -eq 'Public') {
+                  $profileCommand = 'Set-NetConnectionProfile -InterfaceIndex ' + [int]$adapter.InterfaceIndex + ' -NetworkCategory Private' + [Environment]::NewLine
+              }
+              $body = @"
+          `$ErrorActionPreference = 'Stop'
+          `$display = '$FirewallRuleName'
+          $profileCommand
+          Get-NetFirewallRule -DisplayName `$display -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Protocol TCP -LocalPort $FrontPort -LocalAddress '$pcIp' -RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block | Out-Null
+          "@
+              Write-Utf8NoBom -Path $FirewallScript -Text $body
+
+              Add-Log ('Requesting Administrator permission for the trusted-LAN firewall rule on ' + $pcIp + ':' + $FrontPort + '...')
+              $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Argument $FirewallScript)
+              $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args
+              if ($process.ExitCode -ne 0) { throw ('Firewall setup failed with exit code ' + $process.ExitCode + '.') }
+
+              $newCategory = Get-NetworkCategoryForIp -Address $pcIp
+              if ($newCategory -ne 'Private') {
+                  throw ('Windows network is still ' + $newCategory + '. Change this trusted network to Private, then try again.')
+              }
+              if (-not (Test-FirewallReady -PcIp $pcIp)) {
+                  throw 'The Private-network firewall rule could not be verified after setup.'
+              }
+
+              Add-Log 'Firewall ready: active network is Private; selected local IP only; LocalSubnet remote only.'
+              Update-Status
+          }
+
+          function Remove-LegacyRuntimeFiles {''',
+              'Allow-Firewall block'
+          )
+
+          # Replace only the network/firewall tail inside Get-PreflightChecks.
+          engine = sub_one(
+              engine,
+              r"\n\s*if \(Test-FirewallReady -PcIp \$PcIp\) \{ Add-CheckLocal 'Firewall'.*?\n\s*else \{ Add-CheckLocal 'Windows network profile' 'WARN'.*?\n\s*\}\n\nfunction Format-Checks",
+              r'''
+              $category = Get-NetworkCategoryForIp -Address $PcIp
+              if ($category -eq 'Private') {
+                  Add-CheckLocal 'Windows network profile' 'OK' 'Private'
+                  if (Test-FirewallReady -PcIp $PcIp) {
+                      Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule is active.'
+                  }
+                  else {
+                      Add-CheckLocal 'Firewall' 'FAIL' 'Private network is selected, but the relay firewall rule is missing or does not match this IP.'
+                  }
+              }
+              elseif ($category -eq 'Public') {
+                  Add-CheckLocal 'Windows network profile' 'FAIL' 'Current category: Public. Click Allow Firewall and approve changing this trusted LAN to Private.'
+                  Add-CheckLocal 'Firewall' 'FAIL' 'The safe Private-only firewall rule cannot apply while this network is Public.'
+              }
+              else {
+                  Add-CheckLocal 'Windows network profile' 'FAIL' ('Current category: ' + $category + '. The relay requires a Private network profile.')
+                  Add-CheckLocal 'Firewall' 'FAIL' 'The Private-only relay firewall rule is not active on this network profile.'
+              }
+
+              return @($checks)
+          }
+
+          function Format-Checks''',
+              'Get-PreflightChecks network/firewall tail'
+          )
+
+          engine = sub_one(
+              engine,
+              r"\$firewall = if \(-not \[string\]::IsNullOrWhiteSpace\(\$pcIp\).*?\n\s*\$topology = 'NOT CHECKED'",
+              r'''$networkCategory = if (-not [string]::IsNullOrWhiteSpace($pcIp)) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' }
+              $firewall = if ($networkCategory -eq 'Public') {
+                  'BLOCKED - Windows network is Public; click Allow Firewall to change this trusted LAN to Private'
+              }
+              elseif (-not [string]::IsNullOrWhiteSpace($pcIp) -and (Test-FirewallReady -PcIp $pcIp)) {
+                  'OK - active on Private network'
+              }
+              else { 'not active / mismatch' }
+              $topology = 'NOT CHECKED' ''',
+              'diagnostic firewall state'
+          )
+          if "Windows network category: $(if ($pcIp) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' })" not in engine:
+              raise SystemExit('diagnostic category line not found')
+          engine = engine.replace(
+              "Windows network category: $(if ($pcIp) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' })",
+              'Windows network category: $networkCategory',
+              1
+          )
+
+          self_anchor = "    Write-Host ('Pinned sing-box: ' + $TestedSingBoxVersion)\n    Ensure-TestedSingBox"
+          if engine.count(self_anchor) != 1:
+              raise SystemExit('self-test anchor mismatch')
+          engine = engine.replace(
+              self_anchor,
+              "    Write-Host ('Pinned sing-box: ' + $TestedSingBoxVersion)\n    $sourceText = Get-Content -LiteralPath $PSCommandPath -Raw\n    if ($sourceText -notmatch 'Set-NetConnectionProfile') { throw 'Self-test found missing Public-to-Private network repair path.' }\n    if ($sourceText -notmatch \"Windows network profile' 'FAIL'\") { throw 'Self-test found missing blocking network-profile preflight.' }\n    Ensure-TestedSingBox",
+              1
+          )
+
+          # Friendly UI messages.
+          ui = sub_one(
+              ui,
+              r"(\s*'firewall\|administrator\|access is denied\|elevation' \{\s*return \"Windows could not allow the phone connection.*?\n\s*\})",
+              r'''
+                  'network.*Public|network profile|NetworkCategory' {
+                      return "This Windows network is not Private yet.`r`n`r`nClick Allow Firewall and approve changing your trusted home/private network to Private."
+                  }
+                  'firewall|administrator|access is denied|elevation' {
+                      return "Windows could not allow the phone connection.`r`n`r`nClick Allow Firewall again and approve the Windows message."
+                  }''',
+              'friendly network error'
+          )
+
+          ui = sub_one(
+              ui,
+              r"(elseif \(\$names -match 'LAN IP'\) \{\s*\$message = .*?\n\s*\})\s*\n\s*else \{",
+              r'''elseif ($names -match 'LAN IP') {
+                  $message = "This PC address is not ready.`r`n`r`nChoose the current address and try again."
+              }
+              elseif ($names -match 'Windows network profile|Firewall') {
+                  $message = "Your Windows network is not ready for the phone connection.`r`n`r`nClick Allow Firewall. If this is your trusted home/private network, approve changing it to Private."
+              }
+              else {''',
+              'friendly preflight network error'
+          )
+
+          ui = sub_one(
+              ui,
+              r"\[bool\]\$ForeignRelay = \$false\s*\n\s*\)",
+              "[bool]$ForeignRelay = $false,\n        [bool]$FirewallReady = $false\n    )",
+              'button-state signature'
+          )
+          old_start = "    if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }"
+          if ui.count(old_start) != 1:
+              raise SystemExit('Start button state line mismatch')
+          ui = ui.replace(old_start, "    if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }", 1)
+
+          ui = sub_one(
+              ui,
+              r"\n\s*\$firewallReady = \$false\n\s*if \(-not \[string\]::IsNullOrWhiteSpace\(\$selected\)\).*?Set-UiStatusLabel -Label \$script:lblFirewallState -Text 'Not set' -State 'Warning'\s*\n\s*\}",
+              r'''
+              $firewallReady = $false
+              $networkCategory = 'Unknown'
+              if (-not [string]::IsNullOrWhiteSpace($selected)) {
+                  try {
+                      $networkCategory = Get-NetworkCategoryForIp -Address $selected
+                      $firewallReady = Test-FirewallReady -PcIp $selected
+                  }
+                  catch {}
+              }
+              if ($firewallReady) {
+                  Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Ready' -State 'Ready'
+              }
+              elseif ($networkCategory -eq 'Public') {
+                  Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Network is Public' -State 'Error'
+              }
+              else {
+                  Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Not set' -State 'Warning'
+              }''',
+              'UI firewall state'
+          )
+
+          old_next = "    elseif (-not $firewallReady) {\n        $script:lblNextAction.Text = 'Click Allow Firewall so your phone can connect.'\n    }"
+          if ui.count(old_next) != 1:
+              raise SystemExit('next action firewall block mismatch')
+          ui = ui.replace(
+              old_next,
+              "    elseif (-not $firewallReady) {\n        if ($networkCategory -eq 'Public') {\n            $script:lblNextAction.Text = 'Network is Public. Click Allow Firewall and approve Private only on your trusted LAN.'\n        }\n        else {\n            $script:lblNextAction.Text = 'Click Allow Firewall so your phone can connect.'\n        }\n    }",
+              1
+          )
+          old_call = "    Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign"
+          if ui.count(old_call) != 1:
+              raise SystemExit('button-state call mismatch')
+          ui = ui.replace(old_call, old_call + ' -FirewallReady $firewallReady', 1)
+
+          write(engine_path, engine)
+          write(ui_path, ui)
+
+          readme_path = 'README.md'
+          readme = read(readme_path).replace('v1.0.0-rc.13', 'v1.0.0-rc.14')
+          if '### Windows network says Public' not in readme:
+              readme += "\n\n### Windows network says Public\nClick **Allow Firewall**. Only approve changing it to **Private** when this is your trusted home/private LAN. The relay stays blocked on Public networks.\n"
+          write(readme_path, readme)
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -Fq "1.0.0-rc.14" scripts/BPSRRelayManager.ps1
+          grep -Fq "Set-NetConnectionProfile" scripts/BPSRRelayManager.ps1
+          grep -Fq "Current category: Public" scripts/BPSRRelayManager.ps1
+          grep -Fq "BLOCKED - Windows network is Public" scripts/BPSRRelayManager.ps1
+          grep -Fq "Network is Public" scripts/ManagerUi.ps1
+          grep -Fq 'FirewallReady' scripts/ManagerUi.ps1
+
+      - name: Commit RC14
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/BPSRRelayManager.ps1 scripts/ManagerUi.ps1 README.md
+          git commit -m 'Fix Public network firewall false-ready state'
+          git push origin HEAD:feature/user-friendly-manager
