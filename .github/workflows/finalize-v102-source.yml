@@ -33,7 +33,6 @@ jobs:
           elif new not in s:
               raise SystemExit('Unexpected ManagerVersion; refusing to edit')
           PY
-          grep -F "$ManagerVersion = '1.0.2'" scripts/BPSRRelayManager.ps1 >/dev/null || true
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add scripts/BPSRRelayManager.ps1
