@@ -1,0 +1,54 @@
+name: Apply RC11 UI Fix
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - '.github/workflows/apply-rc11-ui-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/user-friendly-manager
+
+      - name: Apply exact RC11 fixes
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyRc11UiFix.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Parse manager and UI
+        shell: powershell
+        run: |
+          foreach ($path in @('.\scripts\BPSRRelayManager.ps1', '.\scripts\ManagerUi.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error ($path + ': ' + $_.Message) }
+              exit 1
+            }
+          }
+          Write-Host 'Manager and UI syntax OK.'
+
+      - name: Commit RC11 fixes
+        shell: powershell
+        run: |
+          git config user.name "MrEz"
+          git config user.email "39240221+Zudin987@users.noreply.github.com"
+          git add -- 'scripts/BPSRRelayManager.ps1' 'scripts/ManagerUi.ps1'
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Fix RC11 UI status row and bump candidate"
+            git push origin HEAD:feature/user-friendly-manager
+          }
