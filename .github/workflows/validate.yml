@@ -97,7 +97,7 @@ jobs:
             "-Text 'Send to Phone'",
             "-Text 'Start Relay'",
             "-Text '5. Start & Play'",
-            "`$nextHeading.Text = 'What to do next'",
+            "-Text 'What to do next'",
             "`$helpTitle.Text = 'Simple Help'",
             "`$targetValue.Text = 'StarSEA'",
             'BPSR_RELAY_UI_SELF_TEST',
