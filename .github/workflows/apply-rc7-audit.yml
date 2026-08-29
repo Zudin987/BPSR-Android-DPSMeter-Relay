@@ -26,12 +26,12 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyRc7AuditPatch.ps1'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Commit audited changes
+      - name: Commit audited source changes
         shell: powershell
         run: |
           git config user.name "MrEz"
           git config user.email "39240221+Zudin987@users.noreply.github.com"
-          git add -- 'scripts/BPSRRelayManager.ps1' 'README.md' '.github/workflows/validate.yml'
+          git add -- 'scripts/BPSRRelayManager.ps1' 'README.md'
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (git diff --cached --quiet)) {
