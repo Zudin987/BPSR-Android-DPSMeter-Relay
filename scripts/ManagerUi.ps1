@@ -755,7 +755,7 @@ $dailyHelp = New-UiCard -X 22 -Y 374 -Width 260 -Height 138
 $dailyText = New-Object System.Windows.Forms.Label
 $dailyText.Text = "1. PC: Start Relay.`r`n`r`n2. Phone: Start SFA.`r`n`r`n3. Open BPSR."
 $dailyText.Location = New-Object System.Drawing.Point(16, 43)
-$dailyText.Size = New-Object System.Drawing.Size(228, 82)
+$dailyText.Size = New-Object System.Drawing.Size(228, 90)
 $dailyText.ForeColor = $Ui.Neutral
 $dailyHelp.Controls.Add($dailyText)
 $helpTab.Controls.Add($dailyHelp)
