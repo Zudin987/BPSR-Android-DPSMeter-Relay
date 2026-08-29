@@ -87,6 +87,7 @@ function Add-CardTitle {
     $label.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
     $label.ForeColor = $Ui.Text
     $label.AutoEllipsis = $true
+    $label.UseMnemonic = $false
     $Parent.Controls.Add($label)
     return $label
 }
@@ -557,6 +558,7 @@ $detailsTitle.Location = New-Object System.Drawing.Point(22, 18)
 $detailsTitle.Size = New-Object System.Drawing.Size(500, 28)
 $detailsTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 14)
 $detailsTitle.ForeColor = $Ui.Text
+$detailsTitle.UseMnemonic = $false
 $detailsTab.Controls.Add($detailsTitle)
 
 $detailsHelp = New-Object System.Windows.Forms.Label
