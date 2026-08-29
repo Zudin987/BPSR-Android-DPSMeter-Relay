@@ -773,7 +773,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: let the app close it.`r`n`r`nPhone cannot connect: same Wi-Fi + Allow Firewall.`r`n`r`nNo DPS: use StarSEA."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: same Wi-Fi + Firewall.`r`n`r`nNo DPS: use StarSEA."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 82)
 $problemText.ForeColor = $Ui.Neutral
