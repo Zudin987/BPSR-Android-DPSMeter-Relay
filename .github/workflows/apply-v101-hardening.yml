@@ -25,7 +25,7 @@ jobs:
       - name: Apply patch and parse
         shell: powershell
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyV101Hardening.ps1'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyV101HardeningV2.ps1'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm '.\scripts\ApplyV101Hardening.ps1'
+          git rm '.\scripts\ApplyV101Hardening.ps1' '.\scripts\ApplyV101HardeningV2.ps1'
           git add '.\scripts\BPSRRelayManager.ps1' '.\scripts\ManagerUi.ps1'
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
