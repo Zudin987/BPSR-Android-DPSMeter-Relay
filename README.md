@@ -293,6 +293,20 @@ A verified rollback remains startable after it passes config/topology validation
 
 This avoids turning an upstream proxy update into an unexpected gameplay/network regression.
 
+## Automated validation
+
+The repository's Windows validation workflow checks the release-critical behavior before a stable release can be published:
+
+- Windows PowerShell 5.1 syntax
+- latency/single-count/universal-DPS/SFA invariants
+- generated PC + Android configs against the pinned sing-box runtime
+- no sniff, multiplexing, unsupported Android `strict_route`, or legacy raw SOCKS path
+- encrypted end-to-end relay smoke traffic
+- temporary phone-profile page behavior
+- clean end-user ZIP contents and SHA256 generation
+
+The stable release workflow additionally requires a successful **Validate** run for the exact commit being published and an explicit real-device field-test confirmation.
+
 ## Files created at runtime
 
 ```text
