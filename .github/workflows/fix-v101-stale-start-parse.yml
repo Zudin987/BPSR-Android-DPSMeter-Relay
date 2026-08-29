@@ -20,6 +20,7 @@ jobs:
       - name: Restore explicit stale start-time parse
         shell: powershell
         run: |
+          # One-shot maintenance patch; workflow is removed after the source commit lands.
           $path = '.\scripts\ManagerUi.ps1'
           $text = [System.IO.File]::ReadAllText($path).Replace("`r`n", "`n")
           $needle = @'
