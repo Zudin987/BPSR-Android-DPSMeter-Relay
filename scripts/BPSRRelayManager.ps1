@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.5'
+$ManagerVersion = '1.0.0-rc.6'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -419,13 +419,15 @@ SFA:
 - Use per-app mode / Proxy selected apps.
 - Select BPSR only after testing.
 
-ZDPS:
-- Network Device: select the physical Wi-Fi/Ethernet adapter used by this PC.
-- Game Capture Preference: Custom
-- Custom BPSR Executable Name: StarSEA
+DPS meter:
+- Universal relay capture target: StarSEA
+- If your meter captures by process/executable, configure it to detect StarSEA.
+- If it captures by network device, select the physical Wi-Fi/Ethernet adapter carrying StarSEA traffic.
+- ZDPS example: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA
 
 IMPORTANT:
 Only StarSEA sends clear BPSR traffic to the game server. Phone-to-PC relay traffic is encrypted so a packet parser cannot count the same BPSR payload a second time.
+Multiple compatible DPS meters may independently observe the same StarSEA stream.
 "@
     Write-Utf8NoBom -Path (Join-Path $OutputDir 'README-IMPORT.txt') -Text $importText
     Add-Log ('Generated encrypted Android SFA profile for PC ' + $PcIp + '.')
@@ -735,7 +737,7 @@ function Setup-Relay {
     Remove-LegacyRuntimeFiles
 
     Add-Log 'Setup / Repair complete. The data path now uses one StarSEA relay process and encrypted phone-to-PC transport.'
-    Add-Log 'Next: Firewall -> Share to Phone/import SFA profile -> configure ZDPS Custom=StarSEA -> Preflight -> START RELAY.'
+    Add-Log 'Next: Firewall -> Share to Phone/import SFA profile -> configure any compatible DPS meter to capture StarSEA -> Preflight -> START RELAY.'
     Update-Status
 }
 
@@ -889,12 +891,13 @@ function Copy-ZdpsSettings {
     $adapter = Get-InterfaceForIp -Address $pcIp
     $adapterText = 'physical Wi-Fi/Ethernet adapter used by this PC'
     if ($adapter) { $adapterText = [string]$adapter.Interface }
-    $text = 'Network Device: ' + $adapterText + "`r`n" +
-            'Game Capture Preference: Custom' + "`r`n" +
-            'Custom BPSR Executable Name: StarSEA' + "`r`n" +
+    $text = 'Universal DPS meter capture target: StarSEA' + "`r`n" +
+            'Physical network adapter: ' + $adapterText + "`r`n" +
+            'Configure the meter to detect/capture the StarSEA process or its traffic.' + "`r`n" +
+            'ZDPS example: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA' + "`r`n" +
             'Do not use a legacy BPSRMobileFront/BPSRRelayIngress process.'
     [System.Windows.Forms.Clipboard]::SetText($text)
-    Add-Log 'Copied correct ZDPS process-capture settings to clipboard.'
+    Add-Log 'Copied universal DPS-meter StarSEA capture notes to clipboard.'
 }
 
 function Get-PreflightChecks {
@@ -1015,7 +1018,7 @@ function Start-Relay {
             startedUtc = [DateTime]::UtcNow.ToString('o')
         })
         Add-Log ('Relay RUNNING: StarSEA PID ' + $process.Id + ' on ' + $pcIp + ':' + $FrontPort + '.')
-        Add-Log 'Phone-to-PC packets are encrypted; only StarSEA-to-game-server BPSR payload is clear for DPS parsing.'
+        Add-Log 'Phone-to-PC packets are encrypted; only StarSEA-to-game-server BPSR payload is clear for compatible DPS meters to parse.'
     }
     catch {
         if ($process) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
@@ -1068,9 +1071,11 @@ Ingress transport: Shadowsocks $IngressMethod / TCP / no multiplex
 Android protocol sniffing: DISABLED
 BPSR relayed TCP ports: $($BpsrTcpPorts -join ', ')
 
-ZDPS expected:
-Game Capture Preference: Custom
-Custom BPSR Executable Name: StarSEA
+Universal DPS meter target:
+Process / executable: StarSEA
+Physical adapter: $adapterText
+Any compatible DPS meter may independently capture this StarSEA stream.
+ZDPS example only: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA
 
 No relay passwords or profile secrets are included in this diagnostic.
 "@
@@ -1198,7 +1203,7 @@ $title.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.Fon
 $form.Controls.Add($title)
 
 $subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = 'Low-latency path: Android -> encrypted LAN tunnel -> StarSEA -> game server. Only one clear BPSR network path.'
+$subtitle.Text = 'Low-latency universal capture path: Android -> encrypted LAN tunnel -> StarSEA -> game server.'
 $subtitle.Location = New-Object System.Drawing.Point(24, 50)
 $subtitle.Size = New-Object System.Drawing.Size(850, 24)
 $form.Controls.Add($subtitle)
@@ -1274,22 +1279,22 @@ $shareNote.Size = New-Object System.Drawing.Size(840, 22)
 $form.Controls.Add($shareNote)
 
 $zdpsBox = New-Object System.Windows.Forms.GroupBox
-$zdpsBox.Text = '4. ZDPS / compatible DPS meter'
+$zdpsBox.Text = '4. Compatible DPS meter - universal StarSEA target'
 $zdpsBox.Location = New-Object System.Drawing.Point(27, 219)
 $zdpsBox.Size = New-Object System.Drawing.Size(850, 105)
 $form.Controls.Add($zdpsBox)
 
 $zdpsText = New-Object System.Windows.Forms.Label
-$zdpsText.Text = 'ZDPS: select your physical Wi-Fi/Ethernet Network Device | Game Capture Preference = Custom' + "`r`n" +
-                 'Custom BPSR Executable Name = StarSEA   (no .exe)  |  Do not use any legacy Front/Ingress process.'
+$zdpsText.Text = 'Configure your DPS meter to detect/capture StarSEA. If it uses a network device, select the physical Wi-Fi/Ethernet adapter.' + "`r`n" +
+                 'ZDPS is only an example: Game Capture Preference = Custom | Custom BPSR Executable Name = StarSEA.'
 $zdpsText.Location = New-Object System.Drawing.Point(14, 24)
 $zdpsText.Size = New-Object System.Drawing.Size(820, 42)
 $zdpsBox.Controls.Add($zdpsText)
 
 $btnCopyZdps = New-Object System.Windows.Forms.Button
-$btnCopyZdps.Text = 'Copy ZDPS Settings'
+$btnCopyZdps.Text = 'Copy DPS Meter Notes'
 $btnCopyZdps.Location = New-Object System.Drawing.Point(14, 68)
-$btnCopyZdps.Size = New-Object System.Drawing.Size(170, 27)
+$btnCopyZdps.Size = New-Object System.Drawing.Size(180, 27)
 $btnCopyZdps.Add_Click({ try { Copy-ZdpsSettings } catch { Show-FriendlyError -Title 'Clipboard error' -Exception $_.Exception } })
 $zdpsBox.Controls.Add($btnCopyZdps)
 
@@ -1373,6 +1378,7 @@ $timer.Start()
 
 Update-Status
 Add-Log ('Ready - manager ' + $ManagerVersion + '. Priority: latency -> single-count capture -> convenience.')
+Add-Log 'Universal DPS target: StarSEA. The relay does not depend on a specific DPS meter.'
 Add-Log ('Tested runtime is pinned to sing-box ' + $TestedSingBoxVersion + '; Setup does not blindly upgrade to an untested upstream release.')
 
 [void]$form.ShowDialog()
