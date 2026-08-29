@@ -237,6 +237,9 @@ function Get-FriendlyErrorText {
         'profile.*stale|profile.*missing|profile.*unavailable|Run Setup|Setup / Repair|Profile not generated' {
             return "Your phone profile is not ready.`r`n`r`nClick Prepare Relay, then try again."
         }
+        'network.*Public|network profile|NetworkCategory' {
+            return "This Windows network is not Private yet.`r`n`r`nClick Allow Firewall and approve changing your trusted home/private network to Private."
+        }
         'firewall|administrator|access is denied|elevation' {
             return "Windows could not allow the phone connection.`r`n`r`nClick Allow Firewall again and approve the Windows message."
         }
@@ -304,6 +307,9 @@ function Show-Preflight {
     elseif ($names -match 'LAN IP') {
         $message = "This PC address is not ready.`r`n`r`nChoose the current address and try again."
     }
+    elseif ($names -match 'Windows network profile|Firewall') {
+        $message = "Your Windows network is not ready for the phone connection.`r`n`r`nClick Allow Firewall. If this is your trusted home/private network, approve changing it to Private."
+    }
     else {
         $message = "Setup is not ready yet.`r`n`r`nClick Prepare Relay, then run the check again."
     }
@@ -321,7 +327,8 @@ function Update-UiButtonStates {
         [bool]$Running,
         [bool]$ProfileReady = $false,
         [bool]$RuntimeReady = $false,
-        [bool]$ForeignRelay = $false
+        [bool]$ForeignRelay = $false,
+        [bool]$FirewallReady = $false
     )
 
     if ($script:btnSetup)       { $script:btnSetup.Enabled = -not $Running }
@@ -330,7 +337,7 @@ function Update-UiButtonStates {
     if ($script:btnQr)          { $script:btnQr.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
     if ($script:btnUrl)         { $script:btnUrl.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
     if ($script:btnPreflight)   { $script:btnPreflight.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }
-    if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }
+    if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnStop)        { $script:btnStop.Enabled = $Running }
     if ($script:btnStopDetails) { $script:btnStopDetails.Enabled = $Running }
     if ($script:btnRollback)    { $script:btnRollback.Enabled = -not $Running }
@@ -402,13 +409,20 @@ function Update-Status {
     else {
         Set-UiStatusLabel -Label $script:lblRuntimeState -Text 'Needs setup' -State 'Warning'
     }
-
     $firewallReady = $false
+    $networkCategory = 'Unknown'
     if (-not [string]::IsNullOrWhiteSpace($selected)) {
-        try { $firewallReady = Test-FirewallReady -PcIp $selected } catch {}
+        try {
+            $networkCategory = Get-NetworkCategoryForIp -Address $selected
+            $firewallReady = Test-FirewallReady -PcIp $selected
+        }
+        catch {}
     }
     if ($firewallReady) {
         Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Ready' -State 'Ready'
+    }
+    elseif ($networkCategory -eq 'Public') {
+        Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Network is Public' -State 'Error'
     }
     else {
         Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Not set' -State 'Warning'
@@ -429,7 +443,12 @@ function Update-Status {
         $script:lblNextAction.Text = 'Click Prepare Relay to refresh the phone profile.'
     }
     elseif (-not $firewallReady) {
-        $script:lblNextAction.Text = 'Click Allow Firewall so your phone can connect.'
+        if ($networkCategory -eq 'Public') {
+            $script:lblNextAction.Text = 'Network is Public. Click Allow Firewall and approve Private only on your trusted LAN.'
+        }
+        else {
+            $script:lblNextAction.Text = 'Click Allow Firewall so your phone can connect.'
+        }
     }
     elseif ($script:shareProcess) {
         $script:lblNextAction.Text = 'Phone link is ready. Scan the QR code or copy the link.'
@@ -438,7 +457,7 @@ function Update-Status {
         $script:lblNextAction.Text = 'Setup is ready. Click Start Relay.'
     }
 
-    Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign
+    Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign -FirewallReady $firewallReady
 }
 
 $form = New-Object System.Windows.Forms.Form

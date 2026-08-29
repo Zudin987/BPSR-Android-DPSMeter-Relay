@@ -2,7 +2,7 @@
 
 A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter.
 
-Current test build: **v1.0.0-rc.13**
+Current test build: **v1.0.0-rc.14**
 
 ## Quick start
 
@@ -173,3 +173,7 @@ After that live test passes, the source version can be changed to `1.0.0`, final
 ## Disclaimer
 
 This is an unofficial community helper. It is not affiliated with or endorsed by the BPSR developers/publisher, any DPS-meter project, SagerNet, sing-box, or QuickChart.
+
+
+### Windows network says Public
+Click **Allow Firewall**. Only approve changing it to **Private** when this is your trusted home/private LAN. The relay stays blocked on Public networks.

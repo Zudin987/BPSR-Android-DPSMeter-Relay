@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.13'
+$ManagerVersion = '1.0.0-rc.14'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -735,18 +735,17 @@ function Wait-ForRelayListener {
 
 function Test-FirewallReady {
     param([string]$PcIp)
+    if ((Get-NetworkCategoryForIp -Address $PcIp) -ne 'Private') { return $false }
     try {
-        $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction Stop | Where-Object { $_.Enabled -eq 'True' })
+        $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue | Where-Object {
+            $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $_.Profile -match 'Private'
+        })
         foreach ($rule in $rules) {
-            if ([string]$rule.Profile -notmatch 'Private') { continue }
-            $port = $rule | Get-NetFirewallPortFilter
-            $addr = $rule | Get-NetFirewallAddressFilter
-            if ([string]$port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort) {
-                $locals = @($addr.LocalAddress)
-                $remotes = @($addr.RemoteAddress)
-                if (($locals -contains $PcIp) -and ($remotes -contains 'LocalSubnet')) {
-                    return $true
-                }
+            $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+            $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+            if ($port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort -and
+                [string]$addr.LocalAddress -eq $PcIp -and [string]$addr.RemoteAddress -eq 'LocalSubnet') {
+                return $true
             }
         }
     }
@@ -756,20 +755,55 @@ function Test-FirewallReady {
 
 function Allow-Firewall {
     $pcIp = Get-SelectedIp
+    $adapter = Get-InterfaceForIp -Address $pcIp
+    if (-not $adapter) { throw 'Could not find the selected Windows network adapter.' }
+
+    $category = Get-NetworkCategoryForIp -Address $pcIp
+    if ($category -eq 'Public') {
+        $choice = [System.Windows.Forms.MessageBox]::Show(
+            "This Windows network is Public.`r`n`r`nThe relay only opens on a Private LAN for safety.`r`n`r`nOnly continue if this is your trusted home/private network.`r`n`r`nChange it to Private and allow your phone to connect?",
+            'Trusted network required',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Add-Log 'Firewall setup cancelled because the active network is Public.'
+            Update-Status
+            return
+        }
+    }
+    elseif ($category -ne 'Private') {
+        throw ('Windows network profile is ' + $category + '. The relay requires a Private network profile.')
+    }
+
     Ensure-Directories
+    $profileCommand = ''
+    if ($category -eq 'Public') {
+        $profileCommand = 'Set-NetConnectionProfile -InterfaceIndex ' + [int]$adapter.InterfaceIndex + ' -NetworkCategory Private' + [Environment]::NewLine
+    }
     $body = @"
 `$ErrorActionPreference = 'Stop'
 `$display = '$FirewallRuleName'
+$profileCommand
 Get-NetFirewallRule -DisplayName `$display -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Protocol TCP -LocalPort $FrontPort -LocalAddress '$pcIp' -RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block | Out-Null
 "@
     Write-Utf8NoBom -Path $FirewallScript -Text $body
 
-    Add-Log ('Requesting Administrator permission for the LAN-only firewall rule on ' + $pcIp + ':' + $FrontPort + '...')
+    Add-Log ('Requesting Administrator permission for the trusted-LAN firewall rule on ' + $pcIp + ':' + $FrontPort + '...')
     $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Argument $FirewallScript)
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args
     if ($process.ExitCode -ne 0) { throw ('Firewall setup failed with exit code ' + $process.ExitCode + '.') }
-    Add-Log 'Firewall ready: Private profile, selected local IP only, LocalSubnet remote only.'
+
+    $newCategory = Get-NetworkCategoryForIp -Address $pcIp
+    if ($newCategory -ne 'Private') {
+        throw ('Windows network is still ' + $newCategory + '. Change this trusted network to Private, then try again.')
+    }
+    if (-not (Test-FirewallReady -PcIp $pcIp)) {
+        throw 'The Private-network firewall rule could not be verified after setup.'
+    }
+
+    Add-Log 'Firewall ready: active network is Private; selected local IP only; LocalSubnet remote only.'
     Update-Status
 }
 
@@ -1038,13 +1072,24 @@ function Get-PreflightChecks {
         if ($listeners.Count -eq 0) { Add-CheckLocal ('TCP ' + $FrontPort) 'OK' 'Free for StarSEA.' }
         else { Add-CheckLocal ('TCP ' + $FrontPort) 'FAIL' 'Already in use.' }
     }
-
-    if (Test-FirewallReady -PcIp $PcIp) { Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule found.' }
-    else { Add-CheckLocal 'Firewall' 'WARN' 'Expected narrow Private-profile manager firewall rule was not found for this IP.' }
-
     $category = Get-NetworkCategoryForIp -Address $PcIp
-    if ($category -eq 'Private') { Add-CheckLocal 'Windows network profile' 'OK' $category }
-    else { Add-CheckLocal 'Windows network profile' 'WARN' ('Current category: ' + $category + '. The manager firewall rule is intentionally Private-only.') }
+    if ($category -eq 'Private') {
+        Add-CheckLocal 'Windows network profile' 'OK' 'Private'
+        if (Test-FirewallReady -PcIp $PcIp) {
+            Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule is active.'
+        }
+        else {
+            Add-CheckLocal 'Firewall' 'FAIL' 'Private network is selected, but the relay firewall rule is missing or does not match this IP.'
+        }
+    }
+    elseif ($category -eq 'Public') {
+        Add-CheckLocal 'Windows network profile' 'FAIL' 'Current category: Public. Click Allow Firewall and approve changing this trusted LAN to Private.'
+        Add-CheckLocal 'Firewall' 'FAIL' 'The safe Private-only firewall rule cannot apply while this network is Public.'
+    }
+    else {
+        Add-CheckLocal 'Windows network profile' 'FAIL' ('Current category: ' + $category + '. The relay requires a Private network profile.')
+        Add-CheckLocal 'Firewall' 'FAIL' 'The Private-only relay firewall rule is not active on this network profile.'
+    }
 
     return @($checks)
 }
@@ -1125,7 +1170,14 @@ function Get-DiagnosticsText {
     $legacyCount = @(Get-Process -Name 'BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count
     $listeners = @(Get-ListeningConnections -Port $FrontPort)
     $listenerText = if ($listeners.Count -eq 0) { 'none' } else { (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ') }
-    $firewall = if (-not [string]::IsNullOrWhiteSpace($pcIp) -and (Test-FirewallReady -PcIp $pcIp)) { 'OK' } else { 'not detected / mismatch' }
+    $networkCategory = if (-not [string]::IsNullOrWhiteSpace($pcIp)) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' }
+    $firewall = if ($networkCategory -eq 'Public') {
+        'BLOCKED - Windows network is Public; click Allow Firewall to change this trusted LAN to Private'
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($pcIp) -and (Test-FirewallReady -PcIp $pcIp)) {
+        'OK - active on Private network'
+    }
+    else { 'not active / mismatch' }
     $topology = 'NOT CHECKED'
     if (-not [string]::IsNullOrWhiteSpace($pcIp)) {
         try { Assert-Topology -PcIp $pcIp; $topology = 'OK - encrypted single-process / no sniff / one clear path' }
@@ -1145,7 +1197,7 @@ Runtime integrity: $(if (Test-RuntimeIntegrity) { 'OK' } else { 'FAIL/UNKNOWN' }
 
 Selected PC IP: $pcIp
 Selected adapter: $adapterText
-Windows network category: $(if ($pcIp) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' })
+Windows network category: $networkCategory
 Profile IP: $profileIp
 Firewall: $firewall
 
@@ -1244,6 +1296,9 @@ function Invoke-SelfTest {
     $testIp = '192.0.2.10'
     Write-Host ('BPSR Relay Manager self-test ' + $ManagerVersion)
     Write-Host ('Pinned sing-box: ' + $TestedSingBoxVersion)
+    $sourceText = Get-Content -LiteralPath $PSCommandPath -Raw
+    if ($sourceText -notmatch 'Set-NetConnectionProfile') { throw 'Self-test found missing Public-to-Private network repair path.' }
+    if ($sourceText -notmatch "Windows network profile' 'FAIL'") { throw 'Self-test found missing blocking network-profile preflight.' }
     Ensure-TestedSingBox
     $credentials = Get-OrCreateCredentials
     Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
