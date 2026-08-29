@@ -55,7 +55,7 @@ This removes the old `BPSRMobileFront.exe` / localhost bridge while keeping a st
 
 - Windows 10/11 PC
 - Android phone running BPSR
-- SFA / sing-box-compatible Android client; for the release candidate, use SFA/sing-box **1.13.x** (1.13.19 is the pinned reference core)
+- SFA / sing-box-compatible Android client; for the **v1.0 line**, use SFA/sing-box **1.13.x** (1.13.19 is the pinned reference core)
 - one or more compatible DPS meters that can parse BPSR and capture/detect `StarSEA` traffic
 - phone and PC on the same reachable LAN/Wi-Fi
 - Windows network normally set to **Private** for the manager-created firewall rule
