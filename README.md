@@ -6,7 +6,7 @@ Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
 
 ## Use
 
-1. Download the latest ZIP from [Releases](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest).
+1. [Download the latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip).
 2. Extract the whole ZIP and run `BPSR Relay Manager.exe`.
 3. Select the PC Ethernet/Wi-Fi address connected to the same router as the phone.
 4. Click **Prepare Relay** → **Allow Firewall** → **Start Phone Setup**.
@@ -36,4 +36,4 @@ The relay does not modify BPSR game files.
 
 **Unofficial community tool.** Not affiliated with BPSR, SFA, sing-box, or any DPS-meter project.
 
-[Latest release](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Source](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay)
+[Direct latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip) · [Latest release](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Source](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay)
