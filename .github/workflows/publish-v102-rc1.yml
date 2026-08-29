@@ -39,7 +39,21 @@ jobs:
           )) {
             if (-not $text.Contains($needle)) { throw ('Missing release invariant: ' + $needle) }
           }
-          if ($text.Contains("type = 'shadowsocks'") -or $text.Contains('multiplex')) { throw 'Forbidden relay transport change detected.' }
+
+          # Inspect only the relay-config generator. The full source intentionally
+          # contains words such as "multiplex" in guards that prohibit those paths.
+          $writeStart = $text.IndexOf('function Write-RelayConfigs', [System.StringComparison]::Ordinal)
+          $writeEnd = $text.IndexOf('function Get-ProfilePcIp', $writeStart, [System.StringComparison]::Ordinal)
+          if ($writeStart -lt 0 -or $writeEnd -le $writeStart) { throw 'Could not isolate Write-RelayConfigs.' }
+          $writeSegment = $text.Substring($writeStart, $writeEnd - $writeStart)
+          foreach ($forbidden in @(
+            "type = 'shadowsocks'",
+            '2022-blake3-aes-128-gcm',
+            'BPSRRelayIngress',
+            'multiplex'
+          )) {
+            if ($writeSegment.Contains($forbidden)) { throw ('Forbidden relay transport change detected: ' + $forbidden) }
+          }
 
       - name: Run source self-test
         shell: powershell
