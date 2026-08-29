@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to publish (example: 1.0.0)'
+        required: true
+        default: '1.0.0'
+        type: string
+      field_test_passed:
+        description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
+        required: true
+        default: 'NO'
+        type: choice
+        options:
+          - 'NO'
+          - 'YES'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enforce stable release gate
+        shell: powershell
+        run: |
+          if ($env:GITHUB_REF_NAME -ne 'main') {
+            throw 'Stable releases must be dispatched from the main branch.'
+          }
+
+          $version = '${{ inputs.version }}'.Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'Stable version must be plain semver such as 1.0.0. RC/prerelease versions are not allowed here.'
+          }
+
+          if ('${{ inputs.field_test_passed }}' -ne 'YES') {
+            throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/compatible-DPS-meter field test has not been confirmed.'
+          }
+
+          $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
+          $match = [regex]::Match(
+            $manager,
+            '^\$ManagerVersion\s*=\s*''([^'']+)''',
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+          )
+          if (-not $match.Success) { throw 'Could not read ManagerVersion.' }
+          $sourceVersion = $match.Groups[1].Value.Trim()
+          if ($sourceVersion -ne $version) {
+            throw ('Release version mismatch. Source=' + $sourceVersion + ', requested=' + $version)
+          }
+
+          $readme = Get-Content '.\README.md' -Raw
+          if ($readme -match '1\.0\.0-rc\.' -or $readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
+            throw 'README still contains prerelease/release-gate wording. Finalize documentation first.'
+          }
+
+          Write-Host ('Stable source/documentation gate passed for v' + $version + '.')
+
+      - name: Require green Validate run for exact commit
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $json = gh run list `
+            --repo '${{ github.repository }}' `
+            --workflow 'Validate' `
+            --commit $env:GITHUB_SHA `
+            --limit 20 `
+            --json databaseId,status,conclusion,event,headSha
+          if ($LASTEXITCODE -ne 0) { throw 'Could not query Validate workflow history.' }
+
+          $runs = @($json | ConvertFrom-Json)
+          $passed = @($runs | Where-Object {
+            $_.headSha -eq $env:GITHUB_SHA -and
+            $_.status -eq 'completed' -and
+            $_.conclusion -eq 'success'
+          })
+          if ($passed.Count -eq 0) {
+            throw ('Stable release blocked: exact commit ' + $env:GITHUB_SHA + ' does not yet have a completed successful Validate workflow run.')
+          }
+          Write-Host ('Exact-commit Validate gate passed using run ' + $passed[0].databaseId + '.')
+
+      - name: Parse PowerShell with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Get-ChildItem '.\scripts' -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+          }
+          Write-Host 'PowerShell syntax OK.'
+
+      - name: Run relay config self-test
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Smoke-test v4-compatible two-stage relay data path
+        shell: powershell
+        run: |
+          $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\TestRelaySmoke.ps1' -SingBoxExe $singBox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build clean release package
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ inputs.version }}'.Trim()
+          $tag = 'v' + $version
+          $zip = Get-ChildItem '.\dist' -Filter '*.zip' -File | Select-Object -First 1
+          $sha = Get-ChildItem '.\dist' -Filter '*.sha256' -File | Select-Object -First 1
+          if (-not $zip -or -not $sha) { throw 'Release assets are missing.' }
+
+          gh release view $tag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.')
+          }
+
+          gh release create $tag $zip.FullName $sha.FullName `
+            --repo '${{ github.repository }}' `
+            --target $env:GITHUB_SHA `
+            --title ('BPSR Android DPSMeter Relay ' + $tag) `
+            --generate-notes `
+            --latest
+
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
+          Write-Host ('Published ' + $tag + ' from commit ' + $env:GITHUB_SHA)
