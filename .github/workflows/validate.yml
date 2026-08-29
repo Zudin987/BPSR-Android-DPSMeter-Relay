@@ -1,0 +1,49 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse relay manager with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE 'scripts\BPSRRelayManager.ps1'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+
+          if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+          }
+
+          Write-Host 'PowerShell syntax OK.'
+
+      - name: Check critical relay invariants
+        shell: powershell
+        run: |
+          $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
+          $required = @(
+              "'BPSRMobileFront.exe'",
+              "'StarSEA.exe'",
+              '$FrontPort = 10902',
+              '$RelayPort = 10903',
+              '15000, 16000, 17000, 18000, 20000, 20001, 21000',
+              "-Profile Private"
+          )
+
+          foreach ($needle in $required) {
+              if (-not $text.Contains($needle)) {
+                  Write-Error "Missing critical relay invariant: $needle"
+                  exit 1
+              }
+          }
+
+          Write-Host 'Critical relay invariants present.'
