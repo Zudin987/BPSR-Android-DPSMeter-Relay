@@ -42,6 +42,8 @@ function New-UiButton {
     $button.FlatAppearance.BorderSize = 1
     $button.FlatAppearance.BorderColor = $Ui.Border
     $button.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.25)
+    $button.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $button.Padding = New-Object System.Windows.Forms.Padding(0)
     $button.Cursor = [System.Windows.Forms.Cursors]::Hand
     $button.TabStop = $true
 
@@ -143,6 +145,84 @@ function Set-UiStatusLabel {
     }
 }
 
+function Get-OldRelaySummary {
+    $items = @(Get-ForeignRelayProcesses)
+    if ($items.Count -eq 0) { return '' }
+    return (@($items | ForEach-Object { $_.Name + '.exe (PID ' + $_.Id + ')' }) -join ', ')
+}
+
+function Close-OldRelayPrompt {
+    $items = @(Get-ForeignRelayProcesses)
+    if ($items.Count -eq 0) { return $true }
+
+    $summary = (@($items | ForEach-Object { $_.Name + '.exe (PID ' + $_.Id + ')' }) -join ', ')
+    $message = "Old relay found:`r`n`r`n$summary`r`n`r`nThis is usually a relay left running by an older build.`r`n`r`nClose it now?"
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        $message,
+        'Old relay found',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { return $false }
+
+    foreach ($item in $items) {
+        try {
+            $current = Get-Process -Id ([int]$item.Id) -ErrorAction Stop
+            if ([string]$current.ProcessName -ne [string]$item.Name) { continue }
+            Stop-Process -Id ([int]$item.Id) -Force -ErrorAction Stop
+            Add-Log ('Closed old relay ' + $item.Name + ' (PID ' + $item.Id + ') after user confirmation.')
+        }
+        catch {
+            Add-Log ('Could not close old relay PID ' + $item.Id + ': ' + $_.Exception.Message)
+        }
+    }
+
+    Start-Sleep -Milliseconds 150
+    $remaining = @(Get-ForeignRelayProcesses)
+    Update-Status
+    if ($remaining.Count -gt 0) {
+        $left = (@($remaining | ForEach-Object { $_.Name + '.exe (PID ' + $_.Id + ')' }) -join ', ')
+        [System.Windows.Forms.MessageBox]::Show(
+            "Windows could not close:`r`n`r`n$left`r`n`r`nRestart your PC, then try again.",
+            'Could not close old relay',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        return $false
+    }
+    return $true
+}
+
+function Invoke-PrepareRelay {
+    $oldText = $script:btnSetup.Text
+    $script:btnSetup.Enabled = $false
+    $script:btnSetup.Text = 'Preparing...'
+    [System.Windows.Forms.Application]::DoEvents()
+    try {
+        try {
+            Setup-Relay
+        }
+        catch {
+            $firstError = $_.Exception
+            if ([string]$firstError.Message -match 'foreign|legacy|duplicate relay') {
+                if (Close-OldRelayPrompt) {
+                    Setup-Relay
+                }
+            }
+            else {
+                throw $firstError
+            }
+        }
+    }
+    catch {
+        Show-FriendlyError -Title 'Could not prepare relay' -Exception $_.Exception
+    }
+    finally {
+        $script:btnSetup.Text = $oldText
+        Update-Status
+    }
+}
+
 function Get-FriendlyErrorText {
     param([System.Exception]$Exception)
 
@@ -174,6 +254,10 @@ function Show-FriendlyError {
     param([string]$Title, [System.Exception]$Exception)
 
     Add-Log ('ERROR: ' + $Exception.Message)
+    if ([string]$Exception.Message -match 'foreign|legacy|duplicate relay') {
+        [void](Close-OldRelayPrompt)
+        return
+    }
     [System.Windows.Forms.MessageBox]::Show(
         (Get-FriendlyErrorText -Exception $Exception),
         $Title,
@@ -283,9 +367,15 @@ function Update-Status {
         return
     }
 
-    $foreign = @(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0
+    $foreignProcesses = @(Get-ForeignRelayProcesses)
+    $foreign = $foreignProcesses.Count -gt 0
     if ($foreign) {
-        Set-UiStatusLabel -Label $script:lblRelayState -Text 'Old relay found' -State 'Error'
+        if ($foreignProcesses.Count -eq 1) {
+            Set-UiStatusLabel -Label $script:lblRelayState -Text ($foreignProcesses[0].Name + '.exe') -State 'Error'
+        }
+        else {
+            Set-UiStatusLabel -Label $script:lblRelayState -Text ($foreignProcesses.Count.ToString() + ' old relays') -State 'Error'
+        }
     }
     else {
         Set-UiStatusLabel -Label $script:lblRelayState -Text 'Stopped' -State 'Neutral'
@@ -325,7 +415,12 @@ function Update-Status {
     }
 
     if ($foreign) {
-        $script:lblNextAction.Text = 'Close old relay apps or restart your PC.'
+        if ($foreignProcesses.Count -eq 1) {
+            $script:lblNextAction.Text = 'Found ' + $foreignProcesses[0].Name + '.exe. Click Prepare Relay to close it.'
+        }
+        else {
+            $script:lblNextAction.Text = 'Found ' + $foreignProcesses.Count + ' old relay processes. Click Prepare Relay to close them.'
+        }
     }
     elseif (-not $runtimeReady) {
         $script:lblNextAction.Text = 'Click Prepare Relay to set up this PC.'
@@ -442,15 +537,15 @@ $script:cmbIp.Add_Leave({ Update-Status })
 $step1 = New-UiCard -X 0 -Y 80 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step1 -Text '1. Prepare Relay' -Y 10)
 [void](Add-CardHelp -Parent $step1 -Text 'Set up the relay on this PC. Do this first.' -Y 36 -Width 338 -Height 24)
-$script:btnSetup = New-UiButton -Text 'Prepare Relay' -X 382 -Y 17 -Width 148 -Height 36 -Primary
-$script:btnSetup.Add_Click({ try { Setup-Relay } catch { Show-FriendlyError -Title 'Could not prepare relay' -Exception $_.Exception } })
+$script:btnSetup = New-UiButton -Text 'Prepare Relay' -X 382 -Y 32 -Width 148 -Height 30 -Primary
+$script:btnSetup.Add_Click({ Invoke-PrepareRelay })
 $step1.Controls.Add($script:btnSetup)
 $setupPanel.Controls.Add($step1)
 
 $step2 = New-UiCard -X 0 -Y 160 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step2 -Text '2. Allow Firewall' -Y 10)
 [void](Add-CardHelp -Parent $step2 -Text 'Allow your phone to reach the relay on this PC.' -Y 36 -Width 338 -Height 24)
-$script:btnFirewall = New-UiButton -Text 'Allow Firewall' -X 382 -Y 17 -Width 148 -Height 36
+$script:btnFirewall = New-UiButton -Text 'Allow Firewall' -X 382 -Y 32 -Width 148 -Height 30
 $script:btnFirewall.Add_Click({ try { Allow-Firewall } catch { Show-FriendlyError -Title 'Could not allow connection' -Exception $_.Exception } })
 $step2.Controls.Add($script:btnFirewall)
 $setupPanel.Controls.Add($step2)
@@ -481,7 +576,7 @@ $dpsText.Size = New-Object System.Drawing.Size(330, 22)
 $dpsText.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.5)
 $dpsText.ForeColor = $Ui.Text
 $step4.Controls.Add($dpsText)
-$btnCopyDpsHome = New-UiButton -Text 'Copy Setup Notes' -X 382 -Y 17 -Width 148 -Height 36
+$btnCopyDpsHome = New-UiButton -Text 'Copy Setup Notes' -X 382 -Y 32 -Width 148 -Height 30
 $btnCopyDpsHome.Add_Click({ try { Copy-ZdpsSettings } catch { Show-FriendlyError -Title 'Could not copy notes' -Exception $_.Exception } })
 $step4.Controls.Add($btnCopyDpsHome)
 $setupPanel.Controls.Add($step4)

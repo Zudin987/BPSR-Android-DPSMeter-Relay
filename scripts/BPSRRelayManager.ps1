@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.11'
+$ManagerVersion = '1.0.0-rc.12'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -647,7 +647,7 @@ function Stop-Relay {
     Update-Status
 }
 
-function Assert-NoForeignRelayProcesses {
+function Get-ForeignRelayProcesses {
     $state = Get-RecordedPids
     $trackedStar = 0
     $trackedStart = ''
@@ -664,11 +664,20 @@ function Assert-NoForeignRelayProcesses {
                 (Test-ExpectedProcess -ProcessId $process.Id -ExpectedPath $StarExe -ExpectedStartUtc $trackedStart)) {
                 continue
             }
-            $foreign += ($name + ' (PID ' + $process.Id + ')')
+            $foreign += [PSCustomObject]@{
+                Name = $name
+                Id = [int]$process.Id
+            }
         }
     }
+    return @($foreign)
+}
+
+function Assert-NoForeignRelayProcesses {
+    $foreign = @(Get-ForeignRelayProcesses)
     if ($foreign.Count -gt 0) {
-        throw ('Foreign/legacy relay process detected: ' + ($foreign -join ', ') + '. Close it before continuing so there is never a second relay path.')
+        $labels = @($foreign | ForEach-Object { $_.Name + ' (PID ' + $_.Id + ')' })
+        throw ('Foreign/legacy relay process detected: ' + ($labels -join ', ') + '. Close it before continuing so there is never a second relay path.')
     }
 }
 
