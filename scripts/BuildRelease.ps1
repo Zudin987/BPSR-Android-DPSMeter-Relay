@@ -94,6 +94,7 @@ $files = @(
     @{ Source = 'README.md'; Destination = 'README.md' },
     @{ Source = 'scripts\LaunchManager.ps1'; Destination = 'scripts\LaunchManager.ps1' },
     @{ Source = 'scripts\BPSRRelayManager.ps1'; Destination = 'scripts\BPSRRelayManager.ps1' },
+    @{ Source = 'scripts\ManagerUi.ps1'; Destination = 'scripts\ManagerUi.ps1' },
     @{ Source = 'scripts\ServeProfile.ps1'; Destination = 'scripts\ServeProfile.ps1' }
 )
 
@@ -133,6 +134,7 @@ $requiredRelative = @(
     'README.md',
     'scripts\LaunchManager.ps1',
     'scripts\BPSRRelayManager.ps1',
+    'scripts\ManagerUi.ps1',
     'scripts\ServeProfile.ps1'
 )
 foreach ($relative in $requiredRelative) {

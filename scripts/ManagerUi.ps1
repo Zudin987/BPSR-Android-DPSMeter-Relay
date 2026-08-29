@@ -263,7 +263,7 @@ function Update-Status {
         Set-UiStatusLabel -Label $script:lblRelayState -Text 'Running' -State 'Running'
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
         Set-UiStatusLabel -Label $script:lblRuntimeState -Text 'Ready' -State 'Ready'
-        Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Active' -State 'Ready'
+        Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Not checked' -State 'Neutral'
         $script:lblNextAction.Text = 'Relay is running. Start BPSR and play.'
         Update-UiButtonStates -Running $true
         return
