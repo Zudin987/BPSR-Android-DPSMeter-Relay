@@ -172,6 +172,10 @@ function Close-OldRelayPrompt {
                 continue
             }
 
+            # Parse the recorded identity up front so malformed state is rejected
+            # before any process-management decision is made.
+            $expectedStart = [DateTime]::Parse([string]$item.StartUtc)
+
             $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)
             if ([string]::IsNullOrWhiteSpace($expectedPath)) {
                 Add-Log ('Skipped old relay PID ' + $item.Id + ' because its executable name is not managed by this project.')
