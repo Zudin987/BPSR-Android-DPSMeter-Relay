@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to publish (example: 1.0.0)'
+        description: 'Stable version to publish (example: 1.0.1)'
         required: true
-        default: '1.0.0'
+        default: '1.0.1'
         type: string
       field_test_passed:
         description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
@@ -38,7 +38,7 @@ jobs:
 
           $version = '${{ inputs.version }}'.Trim()
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw 'Stable version must be plain semver such as 1.0.0. RC/prerelease versions are not allowed here.'
+            throw 'Stable version must be plain semver such as 1.0.1. RC/prerelease versions are not allowed here.'
           }
 
           if ('${{ inputs.field_test_passed }}' -ne 'YES') {
@@ -58,7 +58,7 @@ jobs:
           }
 
           $readme = Get-Content '.\README.md' -Raw
-          if ($readme -match '1\.0\.0-rc\.' -or $readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
+          if ($readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
             throw 'README still contains prerelease/release-gate wording. Finalize documentation first.'
           }
 
@@ -132,8 +132,9 @@ jobs:
           $sha = Get-ChildItem '.\dist' -Filter '*.sha256' -File | Select-Object -First 1
           if (-not $zip -or -not $sha) { throw 'Release assets are missing.' }
 
-          gh release view $tag --repo '${{ github.repository }}' *> $null
-          if ($LASTEXITCODE -eq 0) {
+          cmd.exe /d /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          if ($releaseExists) {
             throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.')
           }
 
