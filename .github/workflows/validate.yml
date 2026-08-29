@@ -53,7 +53,10 @@ jobs:
             'function Get-DiagnosticsText',
             'function Start-ProfileShare',
             'function Restore-PreviousRuntime',
-            'Custom BPSR Executable Name: StarSEA'
+            'Custom BPSR Executable Name: StarSEA',
+            '-ExpectedStartUtc $trackedStart',
+            'Not saving ',
+            'restored the exact pre-rollback runtime files'
           )
 
           foreach ($needle in $required) {
@@ -68,7 +71,7 @@ jobs:
             exit 1
           }
 
-          Write-Host 'Static latency/single-count invariants present.'
+          Write-Host 'Static latency/single-count/safety invariants present.'
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
@@ -99,6 +102,20 @@ jobs:
               throw 'Profile landing page test failed.'
             }
 
+            $badWas404 = $false
+            try {
+              Invoke-WebRequest -Uri ('http://127.0.0.1:' + $port + '/ffffffffffffffffffffffffffffffff/') -UseBasicParsing | Out-Null
+            }
+            catch {
+              if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { $badWas404 = $true }
+            }
+            if (-not $badWas404) { throw 'Wrong-token profile request was not rejected with 404.' }
+
+            $head = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -Method Head -UseBasicParsing
+            if ($head.StatusCode -ne 200) { throw 'Profile HEAD request failed.' }
+            $server.Refresh()
+            if ($server.HasExited) { throw 'HEAD request incorrectly consumed the one-download profile share.' }
+
             $download = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -UseBasicParsing
             if ($download.StatusCode -ne 200 -or $download.Content -notmatch '"test"') {
               throw 'Profile download test failed.'
@@ -107,7 +124,7 @@ jobs:
             $server.WaitForExit(5000) | Out-Null
             $server.Refresh()
             if (-not $server.HasExited) { throw 'One-download profile server did not exit.' }
-            Write-Host 'Temporary profile server test passed.'
+            Write-Host 'Temporary profile server tests passed.'
           }
           finally {
             if ($server) {
