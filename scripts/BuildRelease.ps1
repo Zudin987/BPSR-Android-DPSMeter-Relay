@@ -19,7 +19,11 @@ if (-not (Test-Path -LiteralPath $managerPath -PathType Leaf)) {
 }
 
 $managerText = Get-Content -LiteralPath $managerPath -Raw
-$match = [regex]::Match($managerText, "\$ManagerVersion\s*=\s*'([^']+)'")
+$match = [regex]::Match(
+    $managerText,
+    '^\$ManagerVersion\s*=\s*''([^'']+)''',
+    [System.Text.RegularExpressions.RegexOptions]::Multiline
+)
 if (-not $match.Success) {
     throw 'Could not read ManagerVersion from BPSRRelayManager.ps1.'
 }
@@ -105,7 +109,11 @@ $zipInfo = Get-Item -LiteralPath $zipPath
 if ($zipInfo.Length -le 0) { throw 'Release ZIP is empty.' }
 
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-[System.IO.File]::WriteAllText($hashPath, ($hash + '  ' + [System.IO.Path]::GetFileName($zipPath) + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText(
+    $hashPath,
+    ($hash + '  ' + [System.IO.Path]::GetFileName($zipPath) + [Environment]::NewLine),
+    (New-Object System.Text.UTF8Encoding($false))
+)
 
 # Validate the final archive, not just the staging directory.
 $verifyRoot = Join-Path $root '.build\verify-release'
