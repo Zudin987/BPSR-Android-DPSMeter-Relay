@@ -1,0 +1,122 @@
+name: Validate Firewall Hotfix
+
+on:
+  push:
+    branches:
+      - fix/firewall-verification-v1.0.2
+
+permissions:
+  contents: read
+
+jobs:
+  windows-hotfix:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Get-ChildItem '.\scripts' -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error ($_.Extent.File + ': ' + $_.Message) }
+              exit 1
+            }
+          }
+          Write-Host 'PowerShell syntax OK.'
+
+      - name: Verify firewall hotfix and unchanged relay topology
+        shell: powershell
+        run: |
+          $text = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
+          foreach ($needle in @(
+            "`$ManagerVersion = '1.0.2-rc.1'",
+            "`$TestedSingBoxVersion = 'v1.13.19'",
+            '$FrontPort = 10808',
+            '$InternalPortStart = 18080',
+            '$InternalPortEnd = 18180',
+            'function Test-FirewallProfileIsPrivate',
+            'function Test-FirewallProtocolMatches',
+            "'TCP' { @('TCP', '6') }",
+            "'UDP' { @('UDP', '17') }",
+            'function Test-FirewallLocalSubnetScope',
+            "LocalSubnet4",
+            'function Test-FirewallReady',
+            'Test-FirewallValueContains -Value $port.LocalPort -Expected ([string]$FrontPort)',
+            'Test-FirewallValueContains -Value $addr.LocalAddress -Expected $PcIp',
+            'Test-FirewallLocalSubnetScope -Value $addr.RemoteAddress',
+            '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
+            "server = '127.0.0.1'",
+            "final = 'bpsr-pc'",
+            'route_exclude_address',
+            "stack = 'system'",
+            'Universal DPS meter capture target: StarSEA',
+            'Do not target BPSRMobileFront'
+          )) {
+            if (-not $text.Contains($needle)) { throw ('Missing hotfix/topology invariant: ' + $needle) }
+          }
+
+          $writeStart = $text.IndexOf('function Write-RelayConfigs', [System.StringComparison]::Ordinal)
+          $writeEnd = $text.IndexOf('function Get-ProfilePcIp', $writeStart, [System.StringComparison]::Ordinal)
+          if ($writeStart -lt 0 -or $writeEnd -le $writeStart) { throw 'Could not isolate Write-RelayConfigs.' }
+          $writeSegment = $text.Substring($writeStart, $writeEnd - $writeStart)
+          foreach ($needle in @("type = 'socks'", "server = '127.0.0.1'", "final = 'bpsr-pc'", 'route_exclude_address')) {
+            if (-not $writeSegment.Contains($needle)) { throw ('Relay topology changed: missing ' + $needle) }
+          }
+          foreach ($forbidden in @("type = 'shadowsocks'", '2022-blake3-aes-128-gcm', 'BPSRRelayIngress', 'multiplex')) {
+            if ($writeSegment.Contains($forbidden)) { throw ('Forbidden transport change found: ' + $forbidden) }
+          }
+          if ($text.Contains("[ordered]@{ action = 'sniff' }")) { throw 'Protocol sniffing was reintroduced.' }
+          if ($text.Contains('strict_route = $true')) { throw 'strict_route was reintroduced.' }
+
+          # Do not allow the compatibility fix to broaden the trusted-LAN rule.
+          if (-not $text.Contains("Test-FirewallProfileIsPrivate -Value 'Any'")) { throw 'Negative profile regression test missing.' }
+          if (-not $text.Contains("Test-FirewallLocalSubnetScope -Value 'Any'")) { throw 'Negative subnet regression test missing.' }
+          Write-Host 'Firewall compatibility and relay topology guards passed.'
+
+      - name: Run relay self-test
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test manager UI
+        shell: powershell
+        run: |
+          $env:BPSR_RELAY_UI_SELF_TEST = '1'
+          try {
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally { Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue }
+
+      - name: Smoke-test two-stage relay path
+        shell: powershell
+        run: |
+          $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\TestRelaySmoke.ps1' -SingBoxExe $singBox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build clean fixed package
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Get-Item '.\dist\BPSR-Android-DPSMeter-Relay.zip'
+          $sha = Get-Item '.\dist\BPSR-Android-DPSMeter-Relay.zip.sha256'
+          if ($zip.Length -le 0 -or $sha.Length -le 0) { throw 'Fixed release assets are empty.' }
+          Get-Content $sha.FullName
+
+      - name: Upload fixed test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: BPSR-Android-DPSMeter-Relay-v1.0.2-rc.1
+          path: |
+            dist/BPSR-Android-DPSMeter-Relay.zip
+            dist/BPSR-Android-DPSMeter-Relay.zip.sha256
+          if-no-files-found: error
