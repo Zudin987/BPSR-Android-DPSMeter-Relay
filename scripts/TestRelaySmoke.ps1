@@ -10,9 +10,7 @@ function Get-FreeTcpPort {
         $listener.Start()
         return [int]$listener.LocalEndpoint.Port
     }
-    finally {
-        $listener.Stop()
-    }
+    finally { $listener.Stop() }
 }
 
 if (-not (Test-Path -LiteralPath $SingBoxExe -PathType Leaf)) {
@@ -32,103 +30,108 @@ $ports = New-Object System.Collections.Generic.HashSet[int]
 while ($ports.Count -lt 3) { [void]$ports.Add((Get-FreeTcpPort)) }
 $portList = @($ports)
 $httpPort = $portList[0]
-$ssPort = $portList[1]
-$socksPort = $portList[2]
+$frontPort = $portList[1]
+$backPort = $portList[2]
 $token = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-$key = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes('0123456789abcdef'))
+$frontUsername = 'bpsr'
+$frontPassword = 'front-test-password'
+$internalUsername = 'internal'
+$internalPassword = 'internal-test-password'
 $profile = Join-Path $temp 'android-bpsr-relay.json'
-$serverConfig = Join-Path $temp 'server.json'
-$clientConfig = Join-Path $temp 'client.json'
+$frontConfig = Join-Path $temp 'front.json'
+$backConfig = Join-Path $temp 'back.json'
 
 $httpProcess = $null
-$serverProcess = $null
-$clientProcess = $null
+$frontProcess = $null
+$backProcess = $null
 
 try {
     [System.IO.File]::WriteAllText($profile, '{"relaySmokeTest":"ok"}', (New-Object System.Text.UTF8Encoding($false)))
 
-    $server = [ordered]@{
+    $front = [ordered]@{
         log = [ordered]@{ disabled = $true; level = 'error' }
         inbounds = @(
             [ordered]@{
-                type = 'shadowsocks'
-                tag = 'encrypted-in'
+                type = 'socks'
+                tag = 'phone-in'
                 listen = '127.0.0.1'
-                listen_port = $ssPort
-                network = 'tcp'
-                method = '2022-blake3-aes-128-gcm'
-                password = $key
+                listen_port = $frontPort
+                users = @(
+                    [ordered]@{ username = $frontUsername; password = $frontPassword }
+                )
+            }
+        )
+        outbounds = @(
+            [ordered]@{
+                type = 'socks'
+                tag = 'to-starsea'
+                server = '127.0.0.1'
+                server_port = $backPort
+                version = '5'
+                username = $internalUsername
+                password = $internalPassword
+            }
+        )
+        route = [ordered]@{ final = 'to-starsea' }
+    }
+
+    $back = [ordered]@{
+        log = [ordered]@{ disabled = $true; level = 'error' }
+        inbounds = @(
+            [ordered]@{
+                type = 'socks'
+                tag = 'internal-in'
+                listen = '127.0.0.1'
+                listen_port = $backPort
+                users = @(
+                    [ordered]@{ username = $internalUsername; password = $internalPassword }
+                )
             }
         )
         outbounds = @([ordered]@{ type = 'direct'; tag = 'direct' })
         route = [ordered]@{ final = 'direct' }
     }
 
-    $client = [ordered]@{
-        log = [ordered]@{ disabled = $true; level = 'error' }
-        inbounds = @(
-            [ordered]@{
-                type = 'socks'
-                tag = 'test-socks'
-                listen = '127.0.0.1'
-                listen_port = $socksPort
-            }
-        )
-        outbounds = @(
-            [ordered]@{
-                type = 'shadowsocks'
-                tag = 'encrypted-out'
-                server = '127.0.0.1'
-                server_port = $ssPort
-                network = 'tcp'
-                method = '2022-blake3-aes-128-gcm'
-                password = $key
-            }
-        )
-        route = [ordered]@{ final = 'encrypted-out' }
-    }
-
     $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($serverConfig, ($server | ConvertTo-Json -Depth 20), $utf8)
-    [System.IO.File]::WriteAllText($clientConfig, ($client | ConvertTo-Json -Depth 20), $utf8)
+    [System.IO.File]::WriteAllText($frontConfig, ($front | ConvertTo-Json -Depth 20), $utf8)
+    [System.IO.File]::WriteAllText($backConfig, ($back | ConvertTo-Json -Depth 20), $utf8)
 
-    & $SingBoxExe check -c $serverConfig
-    if ($LASTEXITCODE -ne 0) { throw 'Encrypted relay server smoke config failed sing-box check.' }
-    & $SingBoxExe check -c $clientConfig
-    if ($LASTEXITCODE -ne 0) { throw 'Encrypted relay client smoke config failed sing-box check.' }
+    & $SingBoxExe check -c $frontConfig
+    if ($LASTEXITCODE -ne 0) { throw 'Front SOCKS relay smoke config failed sing-box check.' }
+    & $SingBoxExe check -c $backConfig
+    if ($LASTEXITCODE -ne 0) { throw 'StarSEA SOCKS relay smoke config failed sing-box check.' }
 
     $httpArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $serverScript + '"' +
                 ' -BindIp 127.0.0.1 -Port ' + $httpPort +
                 ' -Token ' + $token +
                 ' -ProfilePath "' + $profile + '" -LifetimeSeconds 60'
     $httpProcess = Start-Process powershell.exe -ArgumentList $httpArgs -WindowStyle Hidden -PassThru
-
-    $serverProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $serverConfig + '"') -WindowStyle Hidden -PassThru
-    $clientProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $clientConfig + '"') -WindowStyle Hidden -PassThru
+    $backProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $backConfig + '"') -WindowStyle Hidden -PassThru
+    $frontProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $frontConfig + '"') -WindowStyle Hidden -PassThru
 
     Start-Sleep -Milliseconds 800
-    foreach ($process in @($httpProcess, $serverProcess, $clientProcess)) {
+    foreach ($process in @($httpProcess, $backProcess, $frontProcess)) {
         $process.Refresh()
         if ($process.HasExited) { throw ('Smoke-test process exited early: PID ' + $process.Id) }
     }
 
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
-    $result = & $curl.Source --fail --silent --show-error --max-time 10 --socks5-hostname ('127.0.0.1:' + $socksPort) $url
-    if ($LASTEXITCODE -ne 0) { throw ('curl encrypted relay request failed with exit code ' + $LASTEXITCODE + '.') }
+    $result = & $curl.Source --fail --silent --show-error --max-time 10 --proxy-user ($frontUsername + ':' + $frontPassword) --socks5-hostname ('127.0.0.1:' + $frontPort) $url
+    if ($LASTEXITCODE -ne 0) { throw ('curl v4-compatible relay request failed with exit code ' + $LASTEXITCODE + '.') }
     $body = ($result | Out-String)
     if ($body -notmatch 'relaySmokeTest' -or $body -notmatch 'ok') {
-        throw 'Encrypted relay smoke test returned unexpected content.'
+        throw 'V4-compatible relay smoke test returned unexpected content.'
     }
 
     $httpProcess.WaitForExit(5000) | Out-Null
     $httpProcess.Refresh()
     if (-not $httpProcess.HasExited) { throw 'HTTP endpoint did not exit after the smoke-test download.' }
 
-    Write-Host 'ENCRYPTED RELAY SMOKE PASS: SOCKS client -> Shadowsocks -> direct HTTP target.'
+    Write-Host 'V4-COMPAT RELAY SMOKE PASS: SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
 }
 finally {
-    foreach ($process in @($clientProcess, $serverProcess, $httpProcess)) {
+    foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {
         if ($process) {
             try {
                 $process.Refresh()
