@@ -95,7 +95,7 @@ try {
             $path = $Matches[2]
             if ($path.Contains('?')) { $path = $path.Substring(0, $path.IndexOf('?')) }
             $basePath = '/' + $Token + '/'
-            $profilePath = $basePath + 'android-bpsr-relay.json'
+            $downloadRoute = $basePath + 'android-bpsr-relay.json'
             $headOnly = ($method -eq 'HEAD')
 
             if ($path -eq $basePath) {
@@ -127,7 +127,7 @@ code{background:#292929;padding:2px 6px;border-radius:5px}
                 $body = [System.Text.Encoding]::UTF8.GetBytes($html)
                 Write-HttpResponse -Stream $stream -StatusCode 200 -StatusText 'OK' -ContentType 'text/html; charset=utf-8' -Body $body -HeadOnly:$headOnly
             }
-            elseif ($path -eq $profilePath) {
+            elseif ($path -eq $downloadRoute) {
                 $body = [System.IO.File]::ReadAllBytes($ProfilePath)
                 Write-HttpResponse -Stream $stream -StatusCode 200 -StatusText 'OK' -ContentType 'application/json; charset=utf-8' -Body $body -HeadOnly:$headOnly
                 if (-not $headOnly) { $servedProfile = $true }
