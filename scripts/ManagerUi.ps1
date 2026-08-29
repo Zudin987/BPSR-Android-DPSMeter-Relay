@@ -775,7 +775,7 @@ $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 $problemText = New-Object System.Windows.Forms.Label
 $problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: same Wi-Fi + Firewall.`r`n`r`nNo DPS: use StarSEA."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
-$problemText.Size = New-Object System.Drawing.Size(274, 82)
+$problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
 $problemHelp.Controls.Add($problemText)
 $helpTab.Controls.Add($problemHelp)
