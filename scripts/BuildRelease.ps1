@@ -37,7 +37,9 @@ if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw ('ManagerVersion is not a valid release version: ' + $version)
 }
 
-$packageBase = 'BPSR-Android-DPSMeter-Relay-v' + $version
+# Keep release asset/folder names permanent so websites and scripts can use
+# /releases/latest/download/BPSR-Android-DPSMeter-Relay.zip across versions.
+$packageBase = 'BPSR-Android-DPSMeter-Relay'
 $zipPath = Join-Path $OutputDirectory ($packageBase + '.zip')
 $hashPath = $zipPath + '.sha256'
 $buildRoot = Join-Path $root '.build'
@@ -153,6 +155,9 @@ if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
 
 $zipInfo = Get-Item -LiteralPath $zipPath
 if ($zipInfo.Length -le 0) { throw 'Release ZIP is empty.' }
+if ($zipInfo.Name -ne 'BPSR-Android-DPSMeter-Relay.zip') {
+    throw ('Release ZIP must use the permanent website-safe filename. Found: ' + $zipInfo.Name)
+}
 
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [System.IO.File]::WriteAllText(
@@ -206,6 +211,7 @@ finally {
 Write-Host ('Release package: ' + $zipPath)
 Write-Host ('SHA256 file:    ' + $hashPath)
 Write-Host ('SHA256:         ' + $hash)
+Write-Host ('Version metadata: v' + $version)
 Write-Host 'User entry point: BPSR Relay Manager.exe'
 
 [PSCustomObject]@{
