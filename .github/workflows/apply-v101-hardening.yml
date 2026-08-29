@@ -1,0 +1,43 @@
+name: Apply v1.0.1 hardening
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-v101-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'Run v1.0.1 hardening patch'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout hardening branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/v1.0.1-hardening
+          fetch-depth: 0
+
+      - name: Apply patch and parse
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyV101Hardening.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit clean source changes
+        shell: powershell
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm '.\scripts\ApplyV101Hardening.ps1'
+          git add '.\scripts\BPSRRelayManager.ps1' '.\scripts\ManagerUi.ps1'
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m 'Harden v1.0.1 relay setup and diagnostics'
+          git push origin HEAD:feature/v1.0.1-hardening
