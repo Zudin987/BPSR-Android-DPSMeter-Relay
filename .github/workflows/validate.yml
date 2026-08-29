@@ -26,10 +26,10 @@ jobs:
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error ("$relative: " + $_.Message) }
+              $errors | ForEach-Object { Write-Error ((${relative} + ': ') + $_.Message) }
               exit 1
             }
-            Write-Host "$relative syntax OK."
+            Write-Host ($relative + ' syntax OK.')
           }
 
       - name: Check latency and single-count invariants
@@ -38,8 +38,10 @@ jobs:
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
 
           $required = @(
-            "$TestedSingBoxVersion = 'v1.13.19'",
-            "$IngressMethod = '2022-blake3-aes-128-gcm'",
+            '$TestedSingBoxVersion',
+            'v1.13.19',
+            '$IngressMethod',
+            '2022-blake3-aes-128-gcm',
             '$FrontPort = 10902',
             '15000, 16000, 17000, 18000, 20000, 20001, 21000',
             "type = 'shadowsocks'",
@@ -56,7 +58,7 @@ jobs:
 
           foreach ($needle in $required) {
             if (-not $text.Contains($needle)) {
-              Write-Error "Missing critical relay invariant: $needle"
+              Write-Error ('Missing critical relay invariant: ' + $needle)
               exit 1
             }
           }
@@ -88,6 +90,7 @@ jobs:
           $server = Start-Process powershell.exe -ArgumentList $args -WindowStyle Hidden -PassThru
           try {
             Start-Sleep -Milliseconds 500
+            $server.Refresh()
             if ($server.HasExited) { throw 'Profile server exited before test request.' }
 
             $base = 'http://127.0.0.1:' + $port + '/' + $token + '/'
@@ -107,5 +110,8 @@ jobs:
             Write-Host 'Temporary profile server test passed.'
           }
           finally {
-            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+            if ($server) {
+              $server.Refresh()
+              if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+            }
           }
