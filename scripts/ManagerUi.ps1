@@ -107,12 +107,12 @@ function Add-CardHelp {
 function New-StatusRow {
     param($Parent, [string]$Title, [int]$Y)
 
-    $title = New-Object System.Windows.Forms.Label
-    $title.Text = $Title
-    $title.Location = New-Object System.Drawing.Point(16, $Y)
-    $title.Size = New-Object System.Drawing.Size(135, 23)
-    $title.ForeColor = $Ui.Muted
-    $Parent.Controls.Add($title)
+    $titleLabel = New-Object System.Windows.Forms.Label
+    $titleLabel.Text = $Title
+    $titleLabel.Location = New-Object System.Drawing.Point(16, $Y)
+    $titleLabel.Size = New-Object System.Drawing.Size(135, 23)
+    $titleLabel.ForeColor = $Ui.Muted
+    $Parent.Controls.Add($titleLabel)
 
     $value = New-Object System.Windows.Forms.Label
     $value.Text = 'Checking...'
