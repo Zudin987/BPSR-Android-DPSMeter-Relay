@@ -1,0 +1,19 @@
+name: Ops ready v1.0.1 PR
+
+on:
+  push:
+    branches:
+      - ops/ready-v1.0.1-pr
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ready:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark PR 2 ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr ready 2 --repo '${{ github.repository }}'
