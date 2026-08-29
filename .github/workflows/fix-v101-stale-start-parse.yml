@@ -20,32 +20,14 @@ jobs:
       - name: Restore explicit stale start-time parse
         shell: powershell
         run: |
-          # One-shot maintenance patch; workflow is removed after the source commit lands.
           $path = '.\scripts\ManagerUi.ps1'
           $text = [System.IO.File]::ReadAllText($path).Replace("`r`n", "`n")
-          $needle = @'
-            if ([string]::IsNullOrWhiteSpace([string]$item.StartUtc)) {
-                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its start-time identity could not be recorded. Refresh and try again.')
-                continue
-            }
-
-            $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)
-'@.Replace("`r`n", "`n")
-          $replacement = @'
-            if ([string]::IsNullOrWhiteSpace([string]$item.StartUtc)) {
-                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its start-time identity could not be recorded. Refresh and try again.')
-                continue
-            }
-
-            # Parse the recorded identity up front so malformed state is rejected
-            # before any process-management decision is made.
-            $expectedStart = [DateTime]::Parse([string]$item.StartUtc)
-
-            $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)
-'@.Replace("`r`n", "`n")
-          if (-not $text.Contains('$expectedStart = [DateTime]::Parse([string]$item.StartUtc)')) {
-            if (-not $text.Contains($needle)) { throw 'Could not locate stale cleanup insertion point.' }
-            $text = $text.Replace($needle, $replacement)
+          $parseLine = '            $expectedStart = [DateTime]::Parse([string]$item.StartUtc)'
+          if (-not $text.Contains($parseLine.TrimStart())) {
+            $pathLine = '            $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)'
+            if (-not $text.Contains($pathLine)) { throw 'Could not locate stale cleanup insertion point.' }
+            $insert = "            # Parse the recorded identity up front so malformed state is rejected`n            # before any process-management decision is made.`n" + $parseLine + "`n`n"
+            $text = $text.Replace($pathLine, $insert + $pathLine)
             [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
           }
           git diff --check
