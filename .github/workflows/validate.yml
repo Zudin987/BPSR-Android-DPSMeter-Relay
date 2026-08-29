@@ -59,12 +59,16 @@ jobs:
             'function Get-DiagnosticsText',
             'function Start-ProfileShare',
             'function Restore-PreviousRuntime',
+            'function Load-TrackedRelayIdentity',
+            'function Set-TrackedRelayIdentity',
+            'function Clear-TrackedRelayIdentity',
             'Universal DPS meter capture target: StarSEA',
             'Any compatible DPS meter may independently capture this StarSEA stream.',
             '-ExpectedStartUtc $trackedStart',
             'Not saving ',
             'restored the exact pre-rollback runtime files',
             'Gameplay hot path: once StarSEA is running, status polling must remain tiny.',
+            'reread PID JSON every timer tick',
             '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
             "if (`$category -eq 'Private')"
           )
@@ -76,15 +80,30 @@ jobs:
             }
           }
 
-          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters')) {
+          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option')) {
             if (-not $readme.Contains($needle)) {
-              Write-Error ('Universal DPS-meter documentation invariant is missing: ' + $needle)
+              Write-Error ('Universal DPS/SFA documentation invariant is missing: ' + $needle)
               exit 1
             }
           }
 
           if ($text.Contains("[ordered]@{ action = 'sniff' }")) {
             Write-Error 'Protocol sniff action was reintroduced into the generated Android path.'
+            exit 1
+          }
+
+          if ($text.Contains('strict_route = $true')) {
+            Write-Error 'Unsupported SFA Android strict_route was reintroduced.'
+            exit 1
+          }
+
+          if (-not $text.Contains("PSObject.Properties['strict_route']")) {
+            Write-Error 'SFA strict_route absence is no longer enforced by topology validation.'
+            exit 1
+          }
+
+          if (-not $text.Contains("$text -match '\"multiplex\"'")) {
+            Write-Error 'Self-test no longer guards against multiplexing on the latency path.'
             exit 1
           }
 
@@ -100,7 +119,7 @@ jobs:
             }
           }
 
-          Write-Host 'Static latency/single-count/universal-DPS/safety/release-gate invariants present.'
+          Write-Host 'Static latency/single-count/universal-DPS/SFA/safety/release-gate invariants present.'
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
