@@ -9,7 +9,7 @@ on:
         default: '1.0.0'
         type: string
       field_test_passed:
-        description: 'Confirm real Android + Windows + SFA + BPSR + ZDPS field test passed'
+        description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
         required: true
         default: 'NO'
         type: choice
@@ -41,7 +41,7 @@ jobs:
           }
 
           if ('${{ inputs.field_test_passed }}' -ne 'YES') {
-            throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/ZDPS field test has not been confirmed.'
+            throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/compatible-DPS-meter field test has not been confirmed.'
           }
 
           $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
