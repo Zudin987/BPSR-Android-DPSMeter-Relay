@@ -5,11 +5,11 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.14'
+$ManagerVersion = '1.0.0-rc.15'
 $TestedSingBoxVersion = 'v1.13.19'
-$IngressMethod = '2022-blake3-aes-128-gcm'
-$FrontPort = 10902
-$BpsrTcpPorts = @(15000, 16000, 17000, 18000, 20000, 20001, 21000)
+$FrontPort = 10808
+$InternalPortStart = 18080
+$InternalPortEnd = 18180
 $FirewallRuleName = 'BPSR Android DPSMeter Relay'
 $ShareLifetimeSeconds = 300
 
@@ -23,8 +23,10 @@ $CredentialsFile = Join-Path $Runtime 'relay-credentials.json'
 $VersionFile = Join-Path $Runtime 'sing-box-version.txt'
 $RuntimeHashFile = Join-Path $Runtime 'sing-box-sha256.txt'
 $SingBoxExe = Join-Path $Runtime 'sing-box.exe'
+$FrontExe = Join-Path $Runtime 'BPSRMobileFront.exe'
 $StarExe = Join-Path $Runtime 'StarSEA.exe'
-$StarConfig = Join-Path $ConfigDir 'starsea-relay.json'
+$FrontConfig = Join-Path $ConfigDir 'pc-relay-front.json'
+$StarConfig = Join-Path $ConfigDir 'pc-relay-back.json'
 $AndroidConfig = Join-Path $OutputDir 'android-bpsr-relay.json'
 $ProfileMeta = Join-Path $OutputDir 'profile-meta.json'
 $FirewallScript = Join-Path $Runtime 'allow-firewall.ps1'
@@ -41,6 +43,8 @@ $script:shareProcess = $null
 $script:shareUrl = ''
 $script:trackedStarPid = 0
 $script:trackedStarStartUtc = ''
+$script:trackedFrontPid = 0
+$script:trackedFrontStartUtc = ''
 $script:trackedRelayIdentityLoaded = $false
 
 function Ensure-Directories {
@@ -318,49 +322,102 @@ function Ensure-TestedSingBox {
     Install-SingBoxVersion -Version $TestedSingBoxVersion
 }
 
+
 function Get-OrCreateCredentials {
     Ensure-Directories
     if (Test-Path -LiteralPath $CredentialsFile) {
         try {
             $existing = Read-JsonFile -Path $CredentialsFile
             if ($existing -and
-                [string]$existing.ingressMethod -eq $IngressMethod -and
-                [string]$existing.ingressPassword -match '^[A-Za-z0-9+/]{22}==$') {
+                [string]$existing.mode -eq 'v4-compatible-socks5' -and
+                [string]$existing.frontUsername -eq 'bpsr' -and
+                [string]$existing.frontPassword -match '^[a-f0-9]{32}$' -and
+                [string]$existing.internalUsername -eq 'internal' -and
+                [string]$existing.internalPassword -match '^[a-f0-9]{32}$') {
                 return $existing
             }
-            Add-Log 'Existing relay credentials were invalid or incompatible; generating new credentials.'
+            Add-Log 'Existing relay credentials use another transport; generating fresh v4-compatible SOCKS5 credentials.'
         }
         catch {
-            Add-Log 'Existing relay credentials were unreadable; generating new credentials.'
+            Add-Log 'Existing relay credentials were unreadable; generating fresh v4-compatible SOCKS5 credentials.'
         }
     }
 
     $credentials = [ordered]@{
-        ingressMethod = $IngressMethod
-        ingressPassword = New-RandomBase64 -Length 16
+        mode = 'v4-compatible-socks5'
+        frontUsername = 'bpsr'
+        frontPassword = [guid]::NewGuid().ToString('N')
+        internalUsername = 'internal'
+        internalPassword = [guid]::NewGuid().ToString('N')
         createdUtc = [DateTime]::UtcNow.ToString('o')
     }
     Write-JsonFile -Path $CredentialsFile -Value $credentials
-    Add-Log 'Generated persistent relay credentials. They are reused so routine repairs do not force a new SFA import.'
+    Add-Log 'Generated persistent v4-compatible SOCKS5 credentials.'
     return (Read-JsonFile -Path $CredentialsFile)
+}
+
+function Get-FreeInternalPort {
+    foreach ($candidatePort in $InternalPortStart..$InternalPortEnd) {
+        $used = @(Get-NetTCPConnection -LocalPort $candidatePort -State Listen -ErrorAction SilentlyContinue)
+        if ($used.Count -eq 0) { return [int]$candidatePort }
+    }
+    throw ('Could not find a free localhost bridge port between ' + $InternalPortStart + ' and ' + $InternalPortEnd + '.')
 }
 
 function Write-RelayConfigs {
     param([string]$PcIp, $Credentials)
 
     Ensure-Directories
+    $internalPort = Get-FreeInternalPort
+
+    # RC.15 restores the transport shape from the user's original Clean v4 pack:
+    # Android -> BPSRMobileFront -> localhost -> StarSEA -> game server.
+    $front = [ordered]@{
+        log = [ordered]@{ disabled = $true; level = 'error' }
+        inbounds = @(
+            [ordered]@{
+                type = 'socks'
+                tag = 'phone-in'
+                listen = $PcIp
+                listen_port = $FrontPort
+                users = @(
+                    [ordered]@{
+                        username = [string]$Credentials.frontUsername
+                        password = [string]$Credentials.frontPassword
+                    }
+                )
+            }
+        )
+        outbounds = @(
+            [ordered]@{
+                type = 'socks'
+                tag = 'to-starsea'
+                server = '127.0.0.1'
+                server_port = $internalPort
+                version = '5'
+                username = [string]$Credentials.internalUsername
+                password = [string]$Credentials.internalPassword
+            }
+        )
+        route = [ordered]@{
+            final = 'to-starsea'
+        }
+    }
 
     $star = [ordered]@{
         log = [ordered]@{ disabled = $true; level = 'error' }
         inbounds = @(
             [ordered]@{
-                type = 'shadowsocks'
-                tag = 'phone-encrypted-in'
-                listen = $PcIp
-                listen_port = $FrontPort
-                network = 'tcp'
-                method = [string]$Credentials.ingressMethod
-                password = [string]$Credentials.ingressPassword
+                type = 'socks'
+                tag = 'internal-in'
+                listen = '127.0.0.1'
+                listen_port = $internalPort
+                users = @(
+                    [ordered]@{
+                        username = [string]$Credentials.internalUsername
+                        password = [string]$Credentials.internalPassword
+                    }
+                )
             }
         )
         outbounds = @(
@@ -376,8 +433,8 @@ function Write-RelayConfigs {
         log = [ordered]@{ disabled = $true; level = 'error' }
         dns = [ordered]@{
             servers = @([ordered]@{ type = 'local'; tag = 'local' })
+            strategy = 'ipv4_only'
             final = 'local'
-            strategy = 'prefer_ipv4'
         }
         inbounds = @(
             [ordered]@{
@@ -391,68 +448,68 @@ function Write-RelayConfigs {
         )
         outbounds = @(
             [ordered]@{
-                type = 'shadowsocks'
+                type = 'socks'
                 tag = 'bpsr-pc'
                 server = $PcIp
                 server_port = $FrontPort
-                network = 'tcp'
-                method = [string]$Credentials.ingressMethod
-                password = [string]$Credentials.ingressPassword
-            },
-            [ordered]@{ type = 'direct'; tag = 'direct' }
+                version = '5'
+                username = [string]$Credentials.frontUsername
+                password = [string]$Credentials.frontPassword
+            }
         )
         route = [ordered]@{
             rules = @(
-                [ordered]@{ protocol = 'dns'; action = 'hijack-dns' },
                 [ordered]@{
-                    network = 'tcp'
-                    port = $BpsrTcpPorts
-                    action = 'route'
-                    outbound = 'bpsr-pc'
+                    port = 53
+                    action = 'hijack-dns'
                 }
             )
-            final = 'direct'
-            auto_detect_interface = $true
-            default_domain_resolver = 'local'
+            final = 'bpsr-pc'
         }
     }
 
+    Write-JsonFile -Path $FrontConfig -Value $front
     Write-JsonFile -Path $StarConfig -Value $star
     Write-JsonFile -Path $AndroidConfig -Value $android
     Write-JsonFile -Path $ProfileMeta -Value ([ordered]@{
         managerVersion = $ManagerVersion
         pcIp = $PcIp
         relayPort = $FrontPort
-        ingress = 'encrypted-shadowsocks'
-        ingressMethod = [string]$Credentials.ingressMethod
+        internalPort = $internalPort
+        ingress = 'v4-compatible-socks5'
         testedSingBoxVersion = $TestedSingBoxVersion
-        bpsrTcpPorts = $BpsrTcpPorts
         generatedUtc = [DateTime]::UtcNow.ToString('o')
     })
 
     $importText = @"
 BPSR Android DPSMeter Relay
 
-Import android-bpsr-relay.json into SFA on the Android phone.
+IMPORTANT FOR RC.15:
+Delete/disable the RC.14 SFA profile and import this newly generated profile.
+RC.15 restores the original Clean v4 routing shape for compatibility.
+
 PC LAN IPv4 in this profile: $PcIp
-Relay port: $FrontPort
+Phone relay port: $FrontPort
 
 SFA:
 - Use per-app mode / Proxy selected apps.
-- Select BPSR only after testing.
+- Select BPSR only.
+- Start SFA before opening BPSR.
 
 DPS meter:
-- Universal relay capture target: StarSEA
-- If your meter captures by process/executable, configure it to detect StarSEA.
-- If it captures by network device, select the physical Wi-Fi/Ethernet adapter carrying StarSEA traffic.
+- Universal capture target: StarSEA
+- Do NOT target BPSRMobileFront.
+- If your meter asks for a physical adapter, select the PC Wi-Fi/Ethernet adapter.
 - ZDPS example: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA
 
-IMPORTANT:
-Only StarSEA sends clear BPSR traffic to the game server. Phone-to-PC relay traffic is encrypted so a packet parser cannot count the same BPSR payload a second time.
-Multiple compatible DPS meters may independently observe the same StarSEA stream.
+Transport:
+- Phone -> PC uses authenticated SOCKS5 on your trusted Private LAN.
+- BPSRMobileFront forwards only to localhost StarSEA.
+- StarSEA is the only process that connects onward to the game server.
+- Do not port-forward relay port $FrontPort.
 "@
-    Write-Utf8NoBom -Path (Join-Path $OutputDir 'README-IMPORT.txt') -Text $importText
-    Add-Log ('Generated encrypted Android SFA profile for PC ' + $PcIp + '.')
+    Write-Utf8NoBom -Path (Join-Path $OutputDir 'IMPORT-THIS-PROFILE.txt') -Text $importText
+    Add-Log ('Generated v4-compatible Android SFA profile for PC ' + $PcIp + '. Re-import is required when upgrading from RC.14.')
 }
 
 function Get-ProfilePcIp {
@@ -461,42 +518,79 @@ function Get-ProfilePcIp {
         if (-not $profile) { return '' }
         $outbound = @($profile.outbounds | Where-Object { $_.tag -eq 'bpsr-pc' } | Select-Object -First 1)[0]
         if (-not $outbound) { return '' }
+        if ([string]$outbound.type -ne 'socks' -or [int]$outbound.server_port -ne $FrontPort) { return '' }
+        if ([string]$profile.route.final -ne 'bpsr-pc') { return '' }
         return [string]$outbound.server
     }
     catch { return '' }
 }
 
+
 function Assert-Topology {
     param([string]$PcIp)
 
+    $front = Read-JsonFile -Path $FrontConfig
     $star = Read-JsonFile -Path $StarConfig
     $android = Read-JsonFile -Path $AndroidConfig
-    if (-not $star -or -not $android) { throw 'Generated relay configuration files are missing or unreadable.' }
+    if (-not $front -or -not $star -or -not $android) {
+        throw 'Generated relay configuration files are missing or unreadable.'
+    }
+
+    $frontIn = @($front.inbounds)
+    $frontOut = @($front.outbounds)
+    if ($frontIn.Count -ne 1 -or [string]$frontIn[0].type -ne 'socks') {
+        throw 'Topology check failed: BPSRMobileFront must have exactly one SOCKS5 phone-facing inbound.'
+    }
+    if ([string]$frontIn[0].listen -ne $PcIp -or [int]$frontIn[0].listen_port -ne $FrontPort) {
+        throw 'Topology check failed: BPSRMobileFront is not bound only to the selected LAN IP/relay port.'
+    }
+    if ($frontOut.Count -ne 1 -or [string]$frontOut[0].type -ne 'socks' -or [string]$frontOut[0].server -ne '127.0.0.1') {
+        throw 'Topology check failed: BPSRMobileFront must forward only to localhost StarSEA.'
+    }
+    if ([string]$front.route.final -ne 'to-starsea') {
+        throw 'Topology check failed: BPSRMobileFront final route is not the localhost StarSEA bridge.'
+    }
+
+    $internalPort = [int]$frontOut[0].server_port
+    if ($internalPort -lt $InternalPortStart -or $internalPort -gt $InternalPortEnd) {
+        throw 'Topology check failed: localhost bridge port is outside the expected private range.'
+    }
 
     $starIn = @($star.inbounds)
     $starOut = @($star.outbounds)
-    if ($starIn.Count -ne 1 -or [string]$starIn[0].type -ne 'shadowsocks') {
-        throw 'Topology check failed: StarSEA must have exactly one encrypted Shadowsocks inbound.'
+    if ($starIn.Count -ne 1 -or [string]$starIn[0].type -ne 'socks') {
+        throw 'Topology check failed: StarSEA must have exactly one localhost SOCKS5 inbound.'
     }
-    if ([string]$starIn[0].listen -ne $PcIp -or [int]$starIn[0].listen_port -ne $FrontPort) {
-        throw 'Topology check failed: StarSEA is not bound only to the selected LAN IP/relay port.'
-    }
-    if ([string]$starIn[0].network -ne 'tcp' -or [string]$starIn[0].method -ne $IngressMethod) {
-        throw 'Topology check failed: the encrypted ingress is not the expected low-overhead TCP Shadowsocks mode.'
+    if ([string]$starIn[0].listen -ne '127.0.0.1' -or [int]$starIn[0].listen_port -ne $internalPort) {
+        throw 'Topology check failed: StarSEA localhost bridge does not match BPSRMobileFront.'
     }
     if ($starOut.Count -ne 1 -or [string]$starOut[0].type -ne 'direct' -or [string]$star.route.final -ne 'direct') {
         throw 'Topology check failed: StarSEA must have exactly one direct Internet outbound path.'
     }
 
+    $frontUser = @($frontIn[0].users | Select-Object -First 1)[0]
     $androidTun = @($android.inbounds | Where-Object { $_.tag -eq 'tun-in' } | Select-Object -First 1)[0]
     $androidProxy = @($android.outbounds | Where-Object { $_.tag -eq 'bpsr-pc' } | Select-Object -First 1)[0]
-    if (-not $androidTun -or -not $androidProxy) { throw 'Topology check failed: Android TUN/proxy entries are missing.' }
-    if ([string]$androidProxy.type -ne 'shadowsocks' -or [string]$androidProxy.server -ne $PcIp -or [int]$androidProxy.server_port -ne $FrontPort) {
-        throw 'Topology check failed: Android is not using the encrypted PC relay.'
+    if (-not $androidTun -or -not $androidProxy) {
+        throw 'Topology check failed: Android TUN/proxy entries are missing.'
     }
-    if ([string]$androidProxy.method -ne $IngressMethod -or [string]$androidProxy.password -ne [string]$starIn[0].password) {
-        throw 'Topology check failed: Android and StarSEA encryption credentials do not match.'
+    if ([string]$androidProxy.type -ne 'socks' -or
+        [string]$androidProxy.server -ne $PcIp -or
+        [int]$androidProxy.server_port -ne $FrontPort -or
+        [string]$androidProxy.version -ne '5') {
+        throw 'Topology check failed: Android is not using the v4-compatible PC SOCKS5 relay.'
     }
+    if ([string]$androidProxy.username -ne [string]$frontUser.username -or
+        [string]$androidProxy.password -ne [string]$frontUser.password) {
+        throw 'Topology check failed: Android and BPSRMobileFront credentials do not match.'
+    }
+
+    $internalUser = @($starIn[0].users | Select-Object -First 1)[0]
+    if ([string]$frontOut[0].username -ne [string]$internalUser.username -or
+        [string]$frontOut[0].password -ne [string]$internalUser.password) {
+        throw 'Topology check failed: BPSRMobileFront and StarSEA localhost credentials do not match.'
+    }
+
     if (@($android.route.rules | Where-Object { $_.action -eq 'sniff' }).Count -ne 0) {
         throw 'Topology check failed: protocol sniffing must remain disabled on the latency path.'
     }
@@ -506,23 +600,18 @@ function Assert-Topology {
     if (-not (@($androidTun.route_exclude_address) -contains ($PcIp + '/32'))) {
         throw 'Topology check failed: the PC relay IP must be excluded from the Android TUN route to prevent a VPN loop.'
     }
-    if ([string]$android.route.final -ne 'direct') {
-        throw 'Topology check failed: non-BPSR Android traffic must remain direct.'
+    if ([string]$android.route.final -ne 'bpsr-pc') {
+        throw 'Topology check failed: selected SFA app traffic must use the PC relay, matching the original Clean v4 profile.'
+    }
+    if (@($android.outbounds).Count -ne 1) {
+        throw 'Topology check failed: Android must have one explicit SOCKS5 outbound so there is no second relay path.'
     }
 
-    $bpsrRules = @($android.route.rules | Where-Object { $_.outbound -eq 'bpsr-pc' })
-    if ($bpsrRules.Count -ne 1 -or [string]$bpsrRules[0].network -ne 'tcp') {
-        throw 'Topology check failed: there must be exactly one TCP BPSR relay rule.'
-    }
-    $actualPorts = @($bpsrRules[0].port | ForEach-Object { [int]$_ } | Sort-Object)
-    $expectedPorts = @($BpsrTcpPorts | Sort-Object)
-    if (($actualPorts -join ',') -ne ($expectedPorts -join ',')) {
-        throw 'Topology check failed: the BPSR TCP port allow-list changed unexpectedly.'
-    }
-
-    $jsonText = (Get-Content -LiteralPath $StarConfig -Raw) + "`n" + (Get-Content -LiteralPath $AndroidConfig -Raw)
-    if ($jsonText -match 'BPSRMobileFront|BPSRRelayIngress|"type"\s*:\s*"socks"') {
-        throw 'Topology check failed: legacy/raw relay components unexpectedly remain in the generated data path.'
+    $allText = (Get-Content -LiteralPath $FrontConfig -Raw) + "`n" +
+               (Get-Content -LiteralPath $StarConfig -Raw) + "`n" +
+               (Get-Content -LiteralPath $AndroidConfig -Raw)
+    if ($allText -match '"type"\s*:\s*"shadowsocks"|BPSRRelayIngress|"multiplex"') {
+        throw 'Topology check failed: an RC.14 encrypted/legacy/multiplex path unexpectedly remains.'
     }
 }
 
@@ -538,43 +627,65 @@ function Test-SingBoxConfig {
 function Validate-GeneratedConfigs {
     param([string]$PcIp)
     Assert-Topology -PcIp $PcIp
+    Test-SingBoxConfig -ConfigPath $FrontConfig
     Test-SingBoxConfig -ConfigPath $StarConfig
     Test-SingBoxConfig -ConfigPath $AndroidConfig
-    Add-Log 'Config validation passed: encrypted single-process topology, no sniffing, no second clear BPSR path.'
+    Add-Log 'Config validation passed: original Clean v4-compatible two-stage SOCKS5 topology, no sniffing, one StarSEA game-server path.'
 }
 
 function Get-RecordedPids {
     try { return Read-JsonFile -Path $PidFile } catch { return $null }
 }
 
+
 function Load-TrackedRelayIdentity {
     if ($script:trackedRelayIdentityLoaded) { return }
     $script:trackedRelayIdentityLoaded = $true
     $script:trackedStarPid = 0
     $script:trackedStarStartUtc = ''
+    $script:trackedFrontPid = 0
+    $script:trackedFrontStartUtc = ''
 
     $state = Get-RecordedPids
-    if ($state -and $state.starPid -and $state.starStartUtc) {
-        $candidatePid = [int]$state.starPid
-        $candidateStart = [string]$state.starStartUtc
-        # Full path/start-time verification happens once when this manager attaches.
-        if (Test-ExpectedProcess -ProcessId $candidatePid -ExpectedPath $StarExe -ExpectedStartUtc $candidateStart) {
-            $script:trackedStarPid = $candidatePid
-            $script:trackedStarStartUtc = $candidateStart
-        }
+    if (-not $state -or -not $state.starPid -or -not $state.starStartUtc -or -not $state.frontPid -or -not $state.frontStartUtc) {
+        return
+    }
+
+    $starPid = [int]$state.starPid
+    $starStart = [string]$state.starStartUtc
+    $frontPid = [int]$state.frontPid
+    $frontStart = [string]$state.frontStartUtc
+
+    # Full path/start-time verification happens once when this manager attaches.
+    $starOk = Test-ExpectedProcess -ProcessId $starPid -ExpectedPath $StarExe -ExpectedStartUtc $starStart
+    $frontOk = Test-ExpectedProcess -ProcessId $frontPid -ExpectedPath $FrontExe -ExpectedStartUtc $frontStart
+    if ($starOk -and $frontOk) {
+        $script:trackedStarPid = $starPid
+        $script:trackedStarStartUtc = $starStart
+        $script:trackedFrontPid = $frontPid
+        $script:trackedFrontStartUtc = $frontStart
     }
 }
 
 function Set-TrackedRelayIdentity {
-    param([int]$ProcessId, [string]$StartUtc)
-    $script:trackedStarPid = $ProcessId
-    $script:trackedStarStartUtc = $StartUtc
+    param(
+        [int]$StarProcessId,
+        [string]$StarStartUtc,
+        [int]$FrontProcessId,
+        [string]$FrontStartUtc
+    )
+    $script:trackedStarPid = $StarProcessId
+    $script:trackedStarStartUtc = $StarStartUtc
+    $script:trackedFrontPid = $FrontProcessId
+    $script:trackedFrontStartUtc = $FrontStartUtc
     $script:trackedRelayIdentityLoaded = $true
 }
 
 function Clear-TrackedRelayIdentity {
     $script:trackedStarPid = 0
     $script:trackedStarStartUtc = ''
+    $script:trackedFrontPid = 0
+    $script:trackedFrontStartUtc = ''
     $script:trackedRelayIdentityLoaded = $true
 }
 
@@ -628,6 +739,7 @@ function Stop-ProfileShare {
     $script:shareUrl = ''
 }
 
+
 function Stop-Relay {
     $state = Get-RecordedPids
     if (-not $state) {
@@ -636,10 +748,22 @@ function Stop-Relay {
         return
     }
 
+    # Stop the phone-facing process first so no new traffic can enter while
+    # StarSEA is being shut down.
+    if ($state.frontPid) {
+        $frontStart = if ($state.frontStartUtc) { [string]$state.frontStartUtc } else { '' }
+        if (Test-ExpectedProcess -ProcessId ([int]$state.frontPid) -ExpectedPath $FrontExe -ExpectedStartUtc $frontStart) {
+            try {
+                Stop-Process -Id ([int]$state.frontPid) -Force -ErrorAction Stop
+                Add-Log ('Stopped BPSRMobileFront (PID ' + [int]$state.frontPid + ').')
+            }
+            catch { Add-Log ('Warning: could not stop BPSRMobileFront: ' + $_.Exception.Message) }
+        }
+    }
+
     if ($state.starPid) {
-        $start = ''
-        if ($state.starStartUtc) { $start = [string]$state.starStartUtc }
-        if (Test-ExpectedProcess -ProcessId ([int]$state.starPid) -ExpectedPath $StarExe -ExpectedStartUtc $start) {
+        $starStart = if ($state.starStartUtc) { [string]$state.starStartUtc } else { '' }
+        if (Test-ExpectedProcess -ProcessId ([int]$state.starPid) -ExpectedPath $StarExe -ExpectedStartUtc $starStart) {
             try {
                 Stop-Process -Id ([int]$state.starPid) -Force -ErrorAction Stop
                 Add-Log ('Stopped StarSEA (PID ' + [int]$state.starPid + ').')
@@ -648,17 +772,11 @@ function Stop-Relay {
         }
     }
 
-    # Migration cleanup for the previous two-process RC. Only stop the exact runtime copy we created.
-    if ($state.frontPid) {
-        foreach ($legacyPath in @((Join-Path $Runtime 'BPSRMobileFront.exe'), (Join-Path $Runtime 'BPSRRelayIngress.exe'))) {
-            if (Test-ExpectedProcess -ProcessId ([int]$state.frontPid) -ExpectedPath $legacyPath) {
-                try {
-                    Stop-Process -Id ([int]$state.frontPid) -Force -ErrorAction Stop
-                    Add-Log ('Stopped legacy relay process PID ' + [int]$state.frontPid + '.')
-                }
-                catch {}
-                break
-            }
+    # RC.14 migration cleanup: only stop an exact tracked BPSRRelayIngress copy.
+    if ($state.ingressPid) {
+        $oldIngress = Join-Path $Runtime 'BPSRRelayIngress.exe'
+        if (Test-ExpectedProcess -ProcessId ([int]$state.ingressPid) -ExpectedPath $oldIngress) {
+            Stop-Process -Id ([int]$state.ingressPid) -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -669,20 +787,24 @@ function Stop-Relay {
 
 function Get-ForeignRelayProcesses {
     $state = Get-RecordedPids
+    $trackedPairHealthy = $false
     $trackedStar = 0
-    $trackedStart = ''
-    if ($state -and $state.starPid) {
+    $trackedFront = 0
+
+    if ($state -and $state.starPid -and $state.starStartUtc -and $state.frontPid -and $state.frontStartUtc) {
         $trackedStar = [int]$state.starPid
-        if ($state.starStartUtc) { $trackedStart = [string]$state.starStartUtc }
+        $trackedFront = [int]$state.frontPid
+        $starOk = Test-ExpectedProcess -ProcessId $trackedStar -ExpectedPath $StarExe -ExpectedStartUtc ([string]$state.starStartUtc)
+        $frontOk = Test-ExpectedProcess -ProcessId $trackedFront -ExpectedPath $FrontExe -ExpectedStartUtc ([string]$state.frontStartUtc)
+        $trackedPairHealthy = $starOk -and $frontOk
     }
 
     $foreign = @()
     foreach ($name in @('StarSEA', 'BPSRMobileFront', 'BPSRRelayIngress')) {
         foreach ($process in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-            if ($name -eq 'StarSEA' -and
-                $process.Id -eq $trackedStar -and
-                (Test-ExpectedProcess -ProcessId $process.Id -ExpectedPath $StarExe -ExpectedStartUtc $trackedStart)) {
-                continue
+            if ($trackedPairHealthy) {
+                if ($name -eq 'StarSEA' -and $process.Id -eq $trackedStar) { continue }
+                if ($name -eq 'BPSRMobileFront' -and $process.Id -eq $trackedFront) { continue }
             }
             $foreign += [PSCustomObject]@{
                 Name = $name
@@ -697,7 +819,7 @@ function Assert-NoForeignRelayProcesses {
     $foreign = @(Get-ForeignRelayProcesses)
     if ($foreign.Count -gt 0) {
         $labels = @($foreign | ForEach-Object { $_.Name + ' (PID ' + $_.Id + ')' })
-        throw ('Foreign/legacy relay process detected: ' + ($labels -join ', ') + '. Close it before continuing so there is never a second relay path.')
+        throw ('Foreign/duplicate relay process detected: ' + ($labels -join ', ') + '. Close it before continuing so there is never a second relay path.')
     }
 }
 
@@ -715,42 +837,66 @@ function Assert-RelayPortFree {
     }
 }
 
-function Wait-ForRelayListener {
-    param([int]$ProcessId, [string]$PcIp)
+function Wait-ForProcessListener {
+    param(
+        [int]$ProcessId,
+        [string]$Address,
+        [int]$Port,
+        [string]$ProcessLabel
+    )
+
     for ($i = 0; $i -lt 40; $i++) {
         try {
             $process = Get-Process -Id $ProcessId -ErrorAction Stop
-            if ($process.HasExited) { throw 'StarSEA exited during startup.' }
+            if ($process.HasExited) { throw ($ProcessLabel + ' exited during startup.') }
         }
-        catch { throw 'StarSEA exited during startup.' }
+        catch { throw ($ProcessLabel + ' exited during startup.') }
 
-        $listeners = @(Get-ListeningConnections -Port $FrontPort | Where-Object {
-            [int]$_.OwningProcess -eq $ProcessId -and ([string]$_.LocalAddress -eq $PcIp -or [string]$_.LocalAddress -eq '0.0.0.0')
+        $listeners = @(Get-ListeningConnections -Port $Port | Where-Object {
+            [int]$_.OwningProcess -eq $ProcessId -and
+            ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
         })
         if ($listeners.Count -gt 0) { return }
         Start-Sleep -Milliseconds 100
     }
-    throw ('StarSEA did not begin listening on ' + $PcIp + ':' + $FrontPort + ' within 4 seconds.')
+    throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' within 4 seconds.')
 }
+
 
 function Test-FirewallReady {
     param([string]$PcIp)
     if ((Get-NetworkCategoryForIp -Address $PcIp) -ne 'Private') { return $false }
+
+    $tcpReady = $false
+    $udpReady = $false
     try {
         $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue | Where-Object {
-            $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and $_.Profile -match 'Private'
+            $_.Enabled -eq 'True' -and
+            $_.Direction -eq 'Inbound' -and
+            $_.Action -eq 'Allow' -and
+            $_.Profile -match 'Private'
         })
+
         foreach ($rule in $rules) {
             $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
             $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
-            if ($port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort -and
-                [string]$addr.LocalAddress -eq $PcIp -and [string]$addr.RemoteAddress -eq 'LocalSubnet') {
-                return $true
+            if (-not $port -or -not $addr) { continue }
+
+            $locals = @($addr.LocalAddress)
+            $remotes = @($addr.RemoteAddress)
+            if ([string]$port.LocalPort -ne [string]$FrontPort -or
+                -not ($locals -contains $PcIp) -or
+                -not ($remotes -contains 'LocalSubnet')) {
+                continue
             }
+
+            if ([string]$port.Protocol -eq 'TCP') { $tcpReady = $true }
+            if ([string]$port.Protocol -eq 'UDP') { $udpReady = $true }
         }
     }
-    catch {}
-    return $false
+    catch { return $false }
+
+    return $tcpReady -and $udpReady
 }
 
 function Allow-Firewall {
@@ -781,16 +927,18 @@ function Allow-Firewall {
     if ($category -eq 'Public') {
         $profileCommand = 'Set-NetConnectionProfile -InterfaceIndex ' + [int]$adapter.InterfaceIndex + ' -NetworkCategory Private' + [Environment]::NewLine
     }
+
     $body = @"
 `$ErrorActionPreference = 'Stop'
 `$display = '$FirewallRuleName'
 $profileCommand
 Get-NetFirewallRule -DisplayName `$display -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Protocol TCP -LocalPort $FrontPort -LocalAddress '$pcIp' -RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block | Out-Null
+New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Protocol UDP -LocalPort $FrontPort -LocalAddress '$pcIp' -RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block | Out-Null
 "@
     Write-Utf8NoBom -Path $FirewallScript -Text $body
 
-    Add-Log ('Requesting Administrator permission for the trusted-LAN firewall rule on ' + $pcIp + ':' + $FrontPort + '...')
+    Add-Log ('Requesting Administrator permission for trusted-LAN TCP+UDP relay rules on ' + $pcIp + ':' + $FrontPort + '...')
     $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Argument $FirewallScript)
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $args
     if ($process.ExitCode -ne 0) { throw ('Firewall setup failed with exit code ' + $process.ExitCode + '.') }
@@ -800,21 +948,23 @@ New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Pro
         throw ('Windows network is still ' + $newCategory + '. Change this trusted network to Private, then try again.')
     }
     if (-not (Test-FirewallReady -PcIp $pcIp)) {
-        throw 'The Private-network firewall rule could not be verified after setup.'
+        throw 'The Private-network TCP+UDP firewall rules could not be verified after setup.'
     }
 
-    Add-Log 'Firewall ready: active network is Private; selected local IP only; LocalSubnet remote only.'
+    Add-Log 'Firewall ready: active network Private; TCP+UDP; selected IP only; LocalSubnet remote only.'
     Update-Status
 }
 
 function Remove-LegacyRuntimeFiles {
     foreach ($path in @(
-        (Join-Path $Runtime 'BPSRMobileFront.exe'),
         (Join-Path $Runtime 'BPSRRelayIngress.exe'),
         (Join-Path $ConfigDir 'front-socks.json'),
-        (Join-Path $ConfigDir 'relay-hidden.json')
+        (Join-Path $ConfigDir 'relay-hidden.json'),
+        (Join-Path $ConfigDir 'starsea-relay.json')
     )) {
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -828,17 +978,22 @@ function Setup-Relay {
     Ensure-TestedSingBox
     $credentials = Get-OrCreateCredentials
 
+    Copy-Item -LiteralPath $SingBoxExe -Destination $FrontExe -Force
     Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
+
     $sourceHash = (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash
+    $frontHash = (Get-FileHash -LiteralPath $FrontExe -Algorithm SHA256).Hash
     $starHash = (Get-FileHash -LiteralPath $StarExe -Algorithm SHA256).Hash
+    if ($sourceHash -ne $frontHash) { throw 'BPSRMobileFront runtime copy verification failed.' }
     if ($sourceHash -ne $starHash) { throw 'StarSEA runtime copy verification failed.' }
 
+    Remove-LegacyRuntimeFiles
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
-    Remove-LegacyRuntimeFiles
 
-    Add-Log 'Setup / Repair complete. The data path now uses one StarSEA relay process and encrypted phone-to-PC transport.'
-    Add-Log 'Next: Firewall -> Share to Phone/import SFA profile -> configure any compatible DPS meter to capture StarSEA -> Preflight -> START RELAY.'
+    Add-Log 'Setup / Repair complete. RC.15 now matches the original Clean v4 two-stage SOCKS5 route.'
+    Add-Log 'IMPORTANT: delete/disable the RC.14 SFA profile and import the newly generated RC.15 profile.'
+    Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
 
@@ -878,6 +1033,7 @@ function Restore-PreviousRuntime {
         Copy-Item -LiteralPath $rollbackExe -Destination $SingBoxExe -Force
         Copy-Item -LiteralPath $rollbackVersion -Destination $VersionFile -Force
         Copy-Item -LiteralPath $rollbackHash -Destination $RuntimeHashFile -Force
+        Copy-Item -LiteralPath $SingBoxExe -Destination $FrontExe -Force
         Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
 
         if (-not (Test-RuntimeIntegrity)) { throw 'Restored runtime failed its local integrity check.' }
@@ -908,6 +1064,7 @@ function Restore-PreviousRuntime {
                     Copy-Item -LiteralPath (Join-Path $tempDir 'sha256.txt') -Destination $RuntimeHashFile -Force
                 }
                 else { Remove-Item -LiteralPath $RuntimeHashFile -Force -ErrorAction SilentlyContinue }
+                Copy-Item -LiteralPath $SingBoxExe -Destination $FrontExe -Force
                 Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
                 Add-Log 'Rollback validation failed; restored the exact pre-rollback runtime files.'
             }
@@ -924,16 +1081,30 @@ function Restore-PreviousRuntime {
     }
 }
 
+
 function Get-RelayTrackedRunning {
     Load-TrackedRelayIdentity
-    if ($script:trackedStarPid -le 0 -or [string]::IsNullOrWhiteSpace($script:trackedStarStartUtc)) { return $false }
+    if ($script:trackedStarPid -le 0 -or
+        $script:trackedFrontPid -le 0 -or
+        [string]::IsNullOrWhiteSpace($script:trackedStarStartUtc) -or
+        [string]::IsNullOrWhiteSpace($script:trackedFrontStartUtc)) {
+        return $false
+    }
+
     try {
-        # Gameplay hot check: PID + immutable process start time only. The executable path
-        # was fully validated when the identity was loaded or when this manager launched it.
-        $process = Get-Process -Id $script:trackedStarPid -ErrorAction Stop
-        $expectedStart = [DateTime]::Parse($script:trackedStarStartUtc).ToUniversalTime()
-        $actualStart = $process.StartTime.ToUniversalTime()
-        return [Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -le 2
+        # Gameplay hot check: two PIDs + immutable process start times only.
+        # Paths were fully validated once when the manager attached/launched them.
+        $star = Get-Process -Id $script:trackedStarPid -ErrorAction Stop
+        $front = Get-Process -Id $script:trackedFrontPid -ErrorAction Stop
+
+        $starExpected = [DateTime]::Parse($script:trackedStarStartUtc).ToUniversalTime()
+        $frontExpected = [DateTime]::Parse($script:trackedFrontStartUtc).ToUniversalTime()
+        $starActual = $star.StartTime.ToUniversalTime()
+        $frontActual = $front.StartTime.ToUniversalTime()
+
+        $starMatches = [Math]::Abs(($starActual - $starExpected).TotalSeconds) -le 2
+        $frontMatches = [Math]::Abs(($frontActual - $frontExpected).TotalSeconds) -le 2
+        return $starMatches -and $frontMatches
     }
     catch { return $false }
 }
@@ -1011,12 +1182,13 @@ function Copy-ZdpsSettings {
     if ($adapter) { $adapterText = [string]$adapter.Interface }
     $text = 'Universal DPS meter capture target: StarSEA' + "`r`n" +
             'Physical network adapter: ' + $adapterText + "`r`n" +
-            'Configure the meter to detect/capture the StarSEA process or its traffic.' + "`r`n" +
+            'Configure the meter to detect/capture StarSEA. BPSRMobileFront is only the phone-facing proxy.' + "`r`n" +
             'ZDPS example: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA' + "`r`n" +
-            'Do not use a legacy BPSRMobileFront/BPSRRelayIngress process.'
+            'Do not target BPSRMobileFront or BPSRRelayIngress.'
     [System.Windows.Forms.Clipboard]::SetText($text)
     Add-Log 'Copied universal DPS-meter StarSEA capture notes to clipboard.'
 }
+
 
 function Get-PreflightChecks {
     param([string]$PcIp, [switch]$RequirePortFree)
@@ -1038,57 +1210,84 @@ function Get-PreflightChecks {
             Add-CheckLocal 'Runtime' 'OK' ($version + ' verified rollback; current project-tested version is ' + $TestedSingBoxVersion)
         }
     }
-    else { Add-CheckLocal 'Runtime' 'FAIL' 'Runtime integrity failed or Setup / Repair has not completed.' }
-
-    if ((Test-Path -LiteralPath $StarExe) -and (Test-Path -LiteralPath $SingBoxExe)) {
-        try {
-            $same = (Get-FileHash -LiteralPath $StarExe -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash
-            if ($same) { Add-CheckLocal 'StarSEA binary' 'OK' 'Matches verified active sing-box runtime.' }
-            else { Add-CheckLocal 'StarSEA binary' 'FAIL' 'Runtime copy hash mismatch.' }
-        }
-        catch { Add-CheckLocal 'StarSEA binary' 'FAIL' $_.Exception.Message }
+    else {
+        Add-CheckLocal 'Runtime' 'FAIL' 'Runtime integrity failed or Prepare Relay has not completed.'
     }
-    else { Add-CheckLocal 'StarSEA binary' 'FAIL' 'Run Setup / Repair first.' }
+
+    if ((Test-Path -LiteralPath $FrontExe) -and
+        (Test-Path -LiteralPath $StarExe) -and
+        (Test-Path -LiteralPath $SingBoxExe)) {
+        try {
+            $baseHash = (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash
+            $frontHash = (Get-FileHash -LiteralPath $FrontExe -Algorithm SHA256).Hash
+            $starHash = (Get-FileHash -LiteralPath $StarExe -Algorithm SHA256).Hash
+            if ($baseHash -eq $frontHash -and $baseHash -eq $starHash) {
+                Add-CheckLocal 'Relay binaries' 'OK' 'BPSRMobileFront and StarSEA match the verified sing-box runtime.'
+            }
+            else {
+                Add-CheckLocal 'Relay binaries' 'FAIL' 'A relay runtime copy hash does not match.'
+            }
+        }
+        catch { Add-CheckLocal 'Relay binaries' 'FAIL' $_.Exception.Message }
+    }
+    else {
+        Add-CheckLocal 'Relay binaries' 'FAIL' 'Run Prepare Relay first.'
+    }
 
     $profileIp = Get-ProfilePcIp
-    if ($profileIp -eq $PcIp) { Add-CheckLocal 'Android profile' 'OK' ('Matches ' + $PcIp) }
-    elseif ([string]::IsNullOrWhiteSpace($profileIp)) { Add-CheckLocal 'Android profile' 'FAIL' 'Profile not generated.' }
-    else { Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp) }
+    if ($profileIp -eq $PcIp) {
+        Add-CheckLocal 'Android profile' 'OK' ('RC.15 v4-compatible profile matches ' + $PcIp)
+    }
+    elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
+        Add-CheckLocal 'Android profile' 'FAIL' 'RC.15 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+    }
+    else {
+        Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
+    }
 
     try {
         Validate-GeneratedConfigs -PcIp $PcIp
-        Add-CheckLocal 'Relay topology' 'OK' 'One StarSEA process; encrypted ingress; no sniff; one clear game-server path.'
+        Add-CheckLocal 'Relay topology' 'OK' 'BPSRMobileFront -> localhost -> StarSEA -> game server; one StarSEA capture path.'
     }
-    catch { Add-CheckLocal 'Relay topology' 'FAIL' $_.Exception.Message }
+    catch {
+        Add-CheckLocal 'Relay topology' 'FAIL' $_.Exception.Message
+    }
 
     try {
         Assert-NoForeignRelayProcesses
-        Add-CheckLocal 'Duplicate relay processes' 'OK' 'None detected.'
+        Add-CheckLocal 'Duplicate relay processes' 'OK' 'No extra StarSEA/front/legacy relay process detected.'
     }
-    catch { Add-CheckLocal 'Duplicate relay processes' 'FAIL' $_.Exception.Message }
+    catch {
+        Add-CheckLocal 'Duplicate relay processes' 'FAIL' $_.Exception.Message
+    }
 
     if ($RequirePortFree) {
         $listeners = @(Get-ListeningConnections -Port $FrontPort)
-        if ($listeners.Count -eq 0) { Add-CheckLocal ('TCP ' + $FrontPort) 'OK' 'Free for StarSEA.' }
-        else { Add-CheckLocal ('TCP ' + $FrontPort) 'FAIL' 'Already in use.' }
+        if ($listeners.Count -eq 0) {
+            Add-CheckLocal ('TCP ' + $FrontPort) 'OK' 'Free for BPSRMobileFront.'
+        }
+        else {
+            Add-CheckLocal ('TCP ' + $FrontPort) 'FAIL' 'Already in use.'
+        }
     }
+
     $category = Get-NetworkCategoryForIp -Address $PcIp
     if ($category -eq 'Private') {
         Add-CheckLocal 'Windows network profile' 'OK' 'Private'
         if (Test-FirewallReady -PcIp $PcIp) {
-            Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule is active.'
+            Add-CheckLocal 'Firewall' 'OK' 'Private-LAN TCP+UDP rules are active for the v4-compatible relay.'
         }
         else {
-            Add-CheckLocal 'Firewall' 'FAIL' 'Private network is selected, but the relay firewall rule is missing or does not match this IP.'
+            Add-CheckLocal 'Firewall' 'FAIL' 'Click Allow Firewall to create the TCP+UDP Private-LAN rules for this IP.'
         }
     }
     elseif ($category -eq 'Public') {
         Add-CheckLocal 'Windows network profile' 'FAIL' 'Current category: Public. Click Allow Firewall and approve changing this trusted LAN to Private.'
-        Add-CheckLocal 'Firewall' 'FAIL' 'The safe Private-only firewall rule cannot apply while this network is Public.'
+        Add-CheckLocal 'Firewall' 'FAIL' 'The safe Private-only relay rules cannot apply while this network is Public.'
     }
     else {
         Add-CheckLocal 'Windows network profile' 'FAIL' ('Current category: ' + $category + '. The relay requires a Private network profile.')
-        Add-CheckLocal 'Firewall' 'FAIL' 'The Private-only relay firewall rule is not active on this network profile.'
+        Add-CheckLocal 'Firewall' 'FAIL' 'The Private-only relay rules are not active on this network profile.'
     }
 
     return @($checks)
@@ -1110,12 +1309,13 @@ function Show-Preflight {
         $(if ($fails.Count -eq 0) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Warning })) | Out-Null
 }
 
+
 function Start-Relay {
     $pcIp = Get-SelectedIp
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'StarSEA relay is already running.'
+        Add-Log 'RC.15 two-stage relay is already running.'
         Update-Status
         return
     }
@@ -1130,35 +1330,62 @@ function Start-Relay {
         Add-Log ('WARNING: ' + $warning.Name + ' - ' + $warning.Detail)
     }
 
-    $process = $null
+    $starProcess = $null
+    $frontProcess = $null
     try {
-        Add-Log 'Starting single-process StarSEA encrypted relay...'
-        $args = 'run -c ' + (Quote-Argument $StarConfig)
-        $process = Start-Process -FilePath $StarExe -ArgumentList $args -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
-        Wait-ForRelayListener -ProcessId $process.Id -PcIp $pcIp
-        $process.Refresh()
-        if ($process.HasExited) { throw 'StarSEA exited immediately after startup.' }
+        $starConfigObject = Read-JsonFile -Path $StarConfig
+        $starInbound = @($starConfigObject.inbounds | Select-Object -First 1)[0]
+        $internalPort = [int]$starInbound.listen_port
 
-        $starStartUtc = $process.StartTime.ToUniversalTime().ToString('o')
+        Add-Log ('Starting StarSEA localhost back relay on 127.0.0.1:' + $internalPort + '...')
+        $starArgs = 'run -c ' + (Quote-Argument $StarConfig)
+        $starProcess = Start-Process -FilePath $StarExe -ArgumentList $starArgs -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
+        Wait-ForProcessListener -ProcessId $starProcess.Id -Address '127.0.0.1' -Port $internalPort -ProcessLabel 'StarSEA'
+        $starProcess.Refresh()
+        if ($starProcess.HasExited) { throw 'StarSEA exited immediately after startup.' }
+
+        Add-Log ('Starting BPSRMobileFront phone relay on ' + $pcIp + ':' + $FrontPort + '...')
+        $frontArgs = 'run -c ' + (Quote-Argument $FrontConfig)
+        $frontProcess = Start-Process -FilePath $FrontExe -ArgumentList $frontArgs -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
+        Wait-ForProcessListener -ProcessId $frontProcess.Id -Address $pcIp -Port $FrontPort -ProcessLabel 'BPSRMobileFront'
+        $frontProcess.Refresh()
+        if ($frontProcess.HasExited) { throw 'BPSRMobileFront exited immediately after startup.' }
+
+        $starStartUtc = $starProcess.StartTime.ToUniversalTime().ToString('o')
+        $frontStartUtc = $frontProcess.StartTime.ToUniversalTime().ToString('o')
         Write-JsonFile -Path $PidFile -Value ([ordered]@{
-            starPid = $process.Id
+            starPid = $starProcess.Id
             starStartUtc = $starStartUtc
+            frontPid = $frontProcess.Id
+            frontStartUtc = $frontStartUtc
             starPath = $StarExe
+            frontPath = $FrontExe
             pcIp = $pcIp
             startedUtc = [DateTime]::UtcNow.ToString('o')
         })
-        Set-TrackedRelayIdentity -ProcessId $process.Id -StartUtc $starStartUtc
-        Add-Log ('Relay RUNNING: StarSEA PID ' + $process.Id + ' on ' + $pcIp + ':' + $FrontPort + '.')
-        Add-Log 'Phone-to-PC packets are encrypted; only StarSEA-to-game-server BPSR payload is clear for compatible DPS meters to parse.'
+        Set-TrackedRelayIdentity `
+            -StarProcessId $starProcess.Id `
+            -StarStartUtc $starStartUtc `
+            -FrontProcessId $frontProcess.Id `
+            -FrontStartUtc $frontStartUtc
+
+        Add-Log ('Relay RUNNING: Android -> BPSRMobileFront PID ' + $frontProcess.Id +
+                 ' -> localhost -> StarSEA PID ' + $starProcess.Id + ' -> game server.')
+        Add-Log 'DPS target remains StarSEA only. Do not target BPSRMobileFront.'
+        Add-Log 'Phone-to-PC SOCKS5 is authenticated but not encrypted; use only on your trusted Private LAN and do not port-forward it.'
     }
     catch {
-        if ($process) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        if ($frontProcess) { Stop-Process -Id $frontProcess.Id -Force -ErrorAction SilentlyContinue }
+        if ($starProcess) { Stop-Process -Id $starProcess.Id -Force -ErrorAction SilentlyContinue }
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
         Clear-TrackedRelayIdentity
         throw
     }
-    finally { Update-Status }
+    finally {
+        Update-Status
+    }
 }
+
 
 function Get-DiagnosticsText {
     $pcIp = ''
@@ -1167,21 +1394,48 @@ function Get-DiagnosticsText {
     $runtimeVersion = Get-InstalledVersion
     $relayRunning = Get-RelayTrackedRunning
     $starCount = @(Get-Process -Name 'StarSEA' -ErrorAction SilentlyContinue).Count
-    $legacyCount = @(Get-Process -Name 'BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count
+    $frontCount = @(Get-Process -Name 'BPSRMobileFront' -ErrorAction SilentlyContinue).Count
+    $legacyCount = @(Get-Process -Name 'BPSRRelayIngress' -ErrorAction SilentlyContinue).Count
     $listeners = @(Get-ListeningConnections -Port $FrontPort)
-    $listenerText = if ($listeners.Count -eq 0) { 'none' } else { (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ') }
-    $networkCategory = if (-not [string]::IsNullOrWhiteSpace($pcIp)) { Get-NetworkCategoryForIp -Address $pcIp } else { 'unknown' }
+    $listenerText = if ($listeners.Count -eq 0) {
+        'none'
+    }
+    else {
+        (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
+    }
+
+    $internalPortText = 'unknown'
+    try {
+        $starObject = Read-JsonFile -Path $StarConfig
+        $starInbound = @($starObject.inbounds | Select-Object -First 1)[0]
+        if ($starInbound) { $internalPortText = [string]$starInbound.listen_port }
+    }
+    catch {}
+
+    $networkCategory = if (-not [string]::IsNullOrWhiteSpace($pcIp)) {
+        Get-NetworkCategoryForIp -Address $pcIp
+    }
+    else { 'unknown' }
+
     $firewall = if ($networkCategory -eq 'Public') {
         'BLOCKED - Windows network is Public; click Allow Firewall to change this trusted LAN to Private'
     }
     elseif (-not [string]::IsNullOrWhiteSpace($pcIp) -and (Test-FirewallReady -PcIp $pcIp)) {
-        'OK - active on Private network'
+        'OK - TCP+UDP active on Private network'
     }
-    else { 'not active / mismatch' }
+    else {
+        'not active / mismatch'
+    }
+
     $topology = 'NOT CHECKED'
     if (-not [string]::IsNullOrWhiteSpace($pcIp)) {
-        try { Assert-Topology -PcIp $pcIp; $topology = 'OK - encrypted single-process / no sniff / one clear path' }
-        catch { $topology = 'FAIL - ' + $_.Exception.Message }
+        try {
+            Assert-Topology -PcIp $pcIp
+            $topology = 'OK - Clean v4-compatible two-stage SOCKS5 / one StarSEA game-server path'
+        }
+        catch {
+            $topology = 'FAIL - ' + $_.Exception.Message
+        }
     }
 
     $adapter = $null
@@ -1202,18 +1456,23 @@ Profile IP: $profileIp
 Firewall: $firewall
 
 Relay running: $relayRunning
+BPSRMobileFront process count: $frontCount
 StarSEA process count: $starCount
-Legacy relay process count: $legacyCount
-TCP $FrontPort listeners: $listenerText
+Legacy BPSRRelayIngress process count: $legacyCount
+Phone relay TCP listener: $listenerText
+Localhost StarSEA bridge port: $internalPortText
 Topology: $topology
-Ingress transport: Shadowsocks $IngressMethod / TCP / no multiplex
+Ingress transport: authenticated SOCKS5 on trusted Private LAN
+Phone-to-PC encryption: DISABLED in RC.15 compatibility mode
 Android protocol sniffing: DISABLED
-BPSR relayed TCP ports: $($BpsrTcpPorts -join ', ')
+Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
+Multiplexing: DISABLED
 
 Universal DPS meter target:
 Process / executable: StarSEA
+Do NOT target: BPSRMobileFront
 Physical adapter: $adapterText
-Any compatible DPS meter may independently capture this StarSEA stream.
+Any compatible DPS meter may independently capture the StarSEA stream.
 ZDPS example only: Game Capture Preference = Custom; Custom BPSR Executable Name: StarSEA
 
 No relay passwords or profile secrets are included in this diagnostic.
@@ -1243,16 +1502,16 @@ function Update-Status {
 
     if (-not $script:lblRelayState) { return }
 
-    # Gameplay hot path: once StarSEA is running, status polling must remain tiny.
-    # Do not hash the runtime, enumerate adapters, reread PID JSON, or resolve the executable path every timer tick.
+    # Gameplay hot path: once the tracked two-process relay is running, status polling must remain tiny.
+    # Do not hash the runtime, enumerate adapters, reread PID JSON, or resolve executable paths every timer tick.
     if (Get-RelayTrackedRunning) {
-        $script:lblRelayState.Text = 'Relay: RUNNING - StarSEA only'
+        $script:lblRelayState.Text = 'Relay: RUNNING - v4-compatible path'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkGreen
         return
     }
 
     if (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
-        $script:lblRelayState.Text = 'Relay: FOREIGN / LEGACY PROCESS DETECTED'
+        $script:lblRelayState.Text = 'Relay: FOREIGN / DUPLICATE PROCESS DETECTED'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
     }
     else {
@@ -1291,26 +1550,59 @@ function Update-Status {
     }
 }
 
+
 function Invoke-SelfTest {
     Ensure-Directories
     $testIp = '192.0.2.10'
     Write-Host ('BPSR Relay Manager self-test ' + $ManagerVersion)
     Write-Host ('Pinned sing-box: ' + $TestedSingBoxVersion)
+
     $sourceText = Get-Content -LiteralPath $PSCommandPath -Raw
-    if ($sourceText -notmatch 'Set-NetConnectionProfile') { throw 'Self-test found missing Public-to-Private network repair path.' }
-    if ($sourceText -notmatch "Windows network profile' 'FAIL'") { throw 'Self-test found missing blocking network-profile preflight.' }
+    if ($sourceText -notmatch 'Set-NetConnectionProfile') {
+        throw 'Self-test found missing Public-to-Private network repair path.'
+    }
+    if ($sourceText -notmatch "Windows network profile' 'FAIL'") {
+        throw 'Self-test found missing blocking network-profile preflight.'
+    }
+    if ($sourceText -notmatch 'Protocol UDP') {
+        throw 'Self-test found missing UDP trusted-LAN firewall rule.'
+    }
+
     Ensure-TestedSingBox
     $credentials = Get-OrCreateCredentials
+    Copy-Item -LiteralPath $SingBoxExe -Destination $FrontExe -Force
     Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
     Write-RelayConfigs -PcIp $testIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $testIp
 
-    $text = (Get-Content -LiteralPath $AndroidConfig -Raw)
-    if ($text -match '"action"\s*:\s*"sniff"') { throw 'Self-test found forbidden sniff action.' }
-    if ($text -match '"strict_route"') { throw 'Self-test found unsupported SFA Android strict_route option.' }
-    if ($text -match '"multiplex"') { throw 'Self-test found multiplexing on the latency path.' }
-    if ($text -notmatch 'route_exclude_address') { throw 'Self-test found missing TUN relay-IP exclusion.' }
-    Write-Host 'SELF-TEST PASS: configs parse, SFA-compatible TUN options pass, no sniff/multiplex, encrypted single-process relay.'
+    $androidText = Get-Content -LiteralPath $AndroidConfig -Raw
+    $frontText = Get-Content -LiteralPath $FrontConfig -Raw
+    $starText = Get-Content -LiteralPath $StarConfig -Raw
+    $allText = $androidText + "`n" + $frontText + "`n" + $starText
+
+    if ($androidText -match '"action"\s*:\s*"sniff"') {
+        throw 'Self-test found forbidden sniff action.'
+    }
+    if ($androidText -match '"strict_route"') {
+        throw 'Self-test found unsupported SFA Android strict_route option.'
+    }
+    if ($allText -match '"multiplex"') {
+        throw 'Self-test found multiplexing on the latency path.'
+    }
+    if ($androidText -notmatch 'route_exclude_address') {
+        throw 'Self-test found missing TUN relay-IP exclusion.'
+    }
+    if ($androidText -notmatch '"final"\s*:\s*"bpsr-pc"') {
+        throw 'Self-test found Android traffic is not fully routed to the v4-compatible PC proxy.'
+    }
+    if ($frontText -notmatch '"server"\s*:\s*"127\.0\.0\.1"') {
+        throw 'Self-test found BPSRMobileFront is not forwarding only to localhost.'
+    }
+    if ($allText -match '"type"\s*:\s*"shadowsocks"') {
+        throw 'Self-test found RC.14 Shadowsocks transport still present.'
+    }
+
+    Write-Host 'SELF-TEST PASS: configs parse, original Clean v4-compatible two-stage SOCKS5 route restored, no sniff/multiplex, StarSEA remains the only game-server process.'
 }
 
 Ensure-Directories

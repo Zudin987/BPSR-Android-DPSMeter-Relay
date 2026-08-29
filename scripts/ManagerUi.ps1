@@ -362,8 +362,8 @@ function Update-Status {
 
     if (-not $script:lblRelayState) { return }
 
-    # Gameplay hot path: one tracked-process check only. No hashing, adapter scans,
-    # config reads, firewall queries, or other setup work while StarSEA is running.
+    # Gameplay hot path: one tracked relay check only. No hashing, adapter scans,
+    # config reads, firewall queries, or other setup work while the relay is running.
     if (Get-RelayTrackedRunning) {
         Set-UiStatusLabel -Label $script:lblRelayState -Text 'Running' -State 'Running'
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
@@ -555,7 +555,7 @@ $script:cmbIp.Add_Leave({ Update-Status })
 
 $step1 = New-UiCard -X 0 -Y 80 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step1 -Text '1. Prepare Relay' -Y 10)
-[void](Add-CardHelp -Parent $step1 -Text 'Set up the relay on this PC. Do this first.' -Y 36 -Width 338 -Height 24)
+[void](Add-CardHelp -Parent $step1 -Text 'Create RC.15 compatibility profile. Do this first.' -Y 36 -Width 338 -Height 24)
 $script:btnSetup = New-UiButton -Text 'Prepare Relay' -X 382 -Y 32 -Width 148 -Height 30 -Primary
 $script:btnSetup.Add_Click({ Invoke-PrepareRelay })
 $step1.Controls.Add($script:btnSetup)
@@ -572,7 +572,7 @@ $setupPanel.Controls.Add($step2)
 # Compatibility marker for legacy static check only: -Text 'Send to Phone'
 $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
 [void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
-[void](Add-CardHelp -Parent $step3 -Text 'Phone: SFA > + > Scan QR Code.' -Y 34 -Width 500 -Height 23)
+[void](Add-CardHelp -Parent $step3 -Text 'Remove old RC.14 profile, then scan the new RC.15 QR.' -Y 34 -Width 500 -Height 23)
 $script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
 $script:btnShare.Add_Click({
     try { Start-ProfileShare; Show-ShareQr }
@@ -593,7 +593,7 @@ $setupPanel.Controls.Add($step3)
 $step4 = New-UiCard -X 0 -Y 352 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step4 -Text '4. DPS Meter' -Y 10)
 $dpsText = New-Object System.Windows.Forms.Label
-$dpsText.Text = 'Set your DPS meter to StarSEA.'
+$dpsText.Text = 'Target StarSEA only. Never BPSRMobileFront.'
 $dpsText.Location = New-Object System.Drawing.Point(16, 37)
 $dpsText.Size = New-Object System.Drawing.Size(330, 22)
 $dpsText.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.5)
@@ -756,7 +756,7 @@ $helpTab.Controls.Add($helpTitle)
 $androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
 [void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
 $androidLeft = New-Object System.Windows.Forms.Label
-$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. PC: Start Phone Setup.`r`n`r`n6. QR opens on the PC."
+$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. Delete/disable old RC.14 profile.`r`n`r`n6. PC: Start Phone Setup."
 $androidLeft.Location = New-Object System.Drawing.Point(16, 43)
 $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
 $androidLeft.ForeColor = $Ui.Neutral
@@ -782,7 +782,7 @@ $helpTab.Controls.Add($dailyHelp)
 $meterHelp = New-UiCard -X 294 -Y 374 -Width 260 -Height 138
 [void](Add-CardTitle -Parent $meterHelp -Text 'DPS meter on PC' -Y 11)
 $meterText = New-Object System.Windows.Forms.Label
-$meterText.Text = "Target: StarSEA`r`n`r`nIf asked for Network Device, choose PC Wi-Fi or Ethernet."
+$meterText.Text = "Target: StarSEA only.`r`nNot BPSRMobileFront.`r`n`r`nAdapter: PC Wi-Fi/Ethernet."
 $meterText.Location = New-Object System.Drawing.Point(16, 43)
 $meterText.Size = New-Object System.Drawing.Size(228, 82)
 $meterText.ForeColor = $Ui.Neutral
@@ -792,7 +792,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: same Wi-Fi + Firewall.`r`n`r`nNo DPS: use StarSEA."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: re-import RC.15 QR.`r`n`r`nNo DPS: StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral

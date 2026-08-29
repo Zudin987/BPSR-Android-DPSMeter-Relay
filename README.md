@@ -1,179 +1,199 @@
 # BPSR Android Relay
 
-A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter.
+A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter on the PC.
 
-Current test build: **v1.0.0-rc.14**
+Current test build: **v1.0.0-rc.15**
+
+> RC.15 is a compatibility test build. It restores the network path from the original **Clean v4** ZIP because the newer RC.13/RC.14 Shadowsocks/port-routing path did not work in the real Android field test.
 
 ## Quick start
 
-Download the release ZIP, extract it, then open `BPSR Relay Manager.exe`.
+### First setup / upgrading from RC.14
 
-### First time - Android baby steps
+1. Extract the RC.15 ZIP to a fresh folder.
+2. Run **BPSR Relay Manager.exe**.
+3. On **Home**, choose the PC Ethernet/Wi-Fi address connected to the same router as the phone.
+4. Click **Prepare Relay**.
+5. Click **Allow Firewall**. The manager requires a **Private** Windows network and keeps the relay restricted to your selected PC IP and local subnet.
+6. On Android SFA, **delete or disable the old RC.13/RC.14 BPSR Relay profile**.
+7. On the PC, click **Start Phone Setup**.
+8. In SFA: **+ → Scan QR Code**, then import the newly generated RC.15 profile.
+9. In SFA per-app/proxy-app settings, select **BPSR only**.
+10. Start SFA.
+11. On the PC DPS meter, use **StarSEA** as the game/capture process. Do **not** target `BPSRMobileFront`.
+12. Click **Start Relay**, then open BPSR on Android.
 
-You need **SFA (sing-box for Android)** on the phone. No root, Shizuku, Termux, ADB, or packet-capture APK is needed.
+### Daily use after setup
 
-1. Install **SFA** on Android.
-2. Put phone and PC on the **same Wi-Fi/LAN**.
-3. PC: **Prepare Relay**.
-4. PC: **Allow Firewall**.
-5. PC: **Start Phone Setup**. An SFA-ready QR opens.
-6. Phone: open **SFA**.
-7. Tap **+ → Scan QR Code**.
-8. Scan the QR on the PC.
-9. Confirm **BPSR Relay**.
-10. SFA **Settings → Per-app proxy → BPSR only**.
-11. Start SFA and allow Android VPN permission if asked.
-12. PC DPS meter target: **StarSEA**.
-13. PC: **Start Relay**, then open BPSR.
+**PC Start Relay → Android Start SFA → Open BPSR**
 
-QR is recommended. The temporary phone page also offers **Open in SFA** and **Download SFA profile** as fallback methods.
+You normally do not need to run Prepare Relay or re-import the profile again unless the PC LAN IP changes, the relay is upgraded, or the manager tells you to repair setup.
 
-### Next time
+## RC.15 compatibility architecture
 
-`PC: Start Relay → Phone: Start SFA → Open BPSR`
-
-The app has only three pages:
-
-- **Home** — normal setup and daily use.
-- **Details** — logs, report, recovery tools.
-- **Help** — short instructions and common fixes.
-
-RC.13 keeps the screenshot-audited UI and adds direct SFA QR import plus Android baby-step guidance.
-
-## If something is red
-
-Read **What to do next** on the Home page. The app uses short messages such as:
-
-- **Needs setup** → click **Prepare Relay**.
-- **Phone Profile: Missing** → click **Prepare Relay**, then **Start Phone Setup**.
-- **Firewall: Not set** → click **Allow Firewall**.
-- **Old relay found** → close old relay apps or restart the PC.
-
-For technical details, open **Details**.
-
-## DPS meter setup
-
-The universal capture target is:
-
-```text
-StarSEA
-```
-
-The relay is intentionally **DPS-meter agnostic**. It does not depend on ZDPS or another specific meter. **Any DPS meter that can parse BPSR traffic** and capture/detect the `StarSEA` stream may use it.
-
-If your meter asks for a network device, choose the physical Wi-Fi/Ethernet adapter used by this PC.
-
-ZDPS is only an example:
-
-```text
-Game Capture Preference: Custom
-Custom BPSR Executable Name: StarSEA
-```
-
-## Multiple DPS meters
-
-**Multiple DPS meters** may run at the same time. Each compatible meter can independently observe the same `StarSEA` game-server stream.
-
-The anti-double-count design prevents duplicate **relay/network paths**. It does not limit how many meter apps you open.
-
-## Low-latency design
-
-Gameplay uses this path:
+RC.15 intentionally matches the transport shape of the original Clean v4 setup:
 
 ```text
 Android BPSR
-  -> SFA routes only known BPSR TCP ports
-  -> encrypted LAN tunnel
-  -> StarSEA.exe on PC :10902
-  -> BPSR game server
+    ↓ SFA TUN / selected app only
+Authenticated SOCKS5 over trusted LAN
+    ↓
+BPSRMobileFront.exe   (PC LAN :10808)
+    ↓ localhost authenticated SOCKS5
+StarSEA.exe           (127.0.0.1 dynamic internal port)
+    ↓ direct
+BPSR game server
 ```
 
-Latency and clean capture are the main priorities:
+`BPSRMobileFront` is only the phone-facing proxy. **StarSEA is the only relay process that connects onward to the game server**, which keeps one clear capture path for compatible DPS meters.
 
-- one Windows gameplay relay process (`StarSEA.exe`)
-- one phone-to-PC proxy hop
-- direct outbound from StarSEA
-- no proxy multiplexing
-- no protocol sniff action
-- TCP only for the known BPSR ports
-- Android `system` TUN stack
-- sing-box data-path logging disabled
-- non-BPSR phone traffic stays direct
-- phone-to-PC BPSR traffic is encrypted, so the PC does not expose a second clear BPSR copy to packet parsers
-- while StarSEA is running, the manager status timer uses the tracked PID/start time only; it does not repeatedly hash binaries, scan adapters, read PID JSON, resolve the executable path, or query firewall/network state
+This is deliberately different from RC.13/RC.14, which used Shadowsocks 2022 plus BPSR-port-specific Android routing. That design passed synthetic CI but failed the real Android/BPSR test, so RC.15 prioritizes the known field-tested Clean v4 shape instead.
 
-The user-facing `BPSR Relay Manager.exe` is only a small launcher. It is **not** part of the gameplay/network path and exits after starting the manager UI.
+## DPS meter setup
 
-## SFA / Android notes
+The relay is **DPS-meter agnostic**. Any DPS meter that can parse BPSR traffic from the `StarSEA` process/stream can be used.
 
-**Show SFA QR** uses the official remote-profile import form:
+- Universal process/executable target: **StarSEA**
+- Do **not** target `BPSRMobileFront`
+- Do **not** target `BPSRRelayIngress`
+- If the meter asks for a physical network adapter, choose the PC Ethernet/Wi-Fi adapter carrying the Internet connection.
+- ZDPS example only: **Game Capture Preference = Custom** and **Custom BPSR Executable Name = StarSEA**.
 
-`sing-box://import-remote-profile?url=<temporary-profile-url>#BPSR%20Relay`
+**Multiple DPS meters are allowed.** They may independently observe the same StarSEA stream. The duplicate/2× DPS protection is about preventing multiple relay paths, not limiting you to one meter app.
 
-SFA downloads the profile from the temporary PC setup server during import. Create a new phone setup link if you need to re-import later.
+## Why two relay processes?
 
-For the v1.0 line, use an SFA/sing-box **1.13.x** compatible Android client. The project-tested reference core is **sing-box v1.13.19**.
+This is intentional in RC.15 and comes directly from the original Clean v4 topology:
 
-The generated Android profile does not use `strict_route`. SFA's Android app **does not implement that TUN option**, so the relay uses the supported PC relay-IP exclusion instead.
+- `BPSRMobileFront.exe` accepts the Android SOCKS5 connection on the LAN.
+- It can only forward to the localhost StarSEA bridge.
+- `StarSEA.exe` is the only stage with a direct game-server outbound.
 
-Only these BPSR TCP destination ports are routed through the PC relay:
+That separation is what makes `StarSEA` a clean, stable capture target while keeping the phone-facing listener out of the DPS capture path.
 
-```text
-15000, 16000, 17000, 18000, 20000, 20001, 21000
-```
+## Android / SFA notes
+
+The generated SFA profile uses:
+
+- TUN stack: `system`
+- `auto_route = true`
+- the PC relay IP excluded from the TUN route to avoid a VPN loop
+- local DNS with IPv4-only strategy
+- DNS hijack for port 53
+- one authenticated SOCKS5 outbound to the PC
+- the selected SFA app's traffic routed through that PC relay
+- protocol sniffing disabled
+- multiplexing disabled
+
+`strict_route` is intentionally absent because the SFA Android build does not implement that TUN option.
+
+**Important:** RC.15 uses a different Android transport from RC.14. Do not reuse the old RC.14 SFA profile. Prepare Relay and import the new RC.15 QR/profile.
+
+## Network safety
+
+RC.15 prioritizes compatibility with the original working setup. The phone → PC hop is **authenticated SOCKS5 but not encrypted**.
+
+Use it only on a **trusted home/private LAN**:
+
+- Windows network profile must be **Private**.
+- Firewall access is limited to the selected PC IP, TCP/UDP port 10808, and `LocalSubnet` only.
+- Do **not** port-forward TCP/UDP 10808 on your router.
+- Do **not** use it on an untrusted public Wi-Fi network.
+- The localhost BPSRMobileFront → StarSEA bridge is not exposed to the LAN.
+
+The relay credentials are randomly generated and are not included in diagnostics.
+
+## The three pages
+
+### Home
+
+Normal setup and daily-use actions:
+
+- **Prepare Relay**
+- **Allow Firewall**
+- **Start Phone Setup** / SFA QR import
+- DPS target reminder
+- **Start Relay** / **Stop Relay**
+
+### Details
+
+Troubleshooting tools, diagnostic report, logs, restore/recovery actions, and profile-folder access.
+
+### Help
+
+Short Android/SFA instructions and common fixes for non-technical users.
 
 ## Common problems
 
-### Phone cannot connect
+### BPSR stops connecting as soon as SFA starts
 
-- Phone and PC should be on the same reachable Wi-Fi/LAN.
-- Click **Allow Firewall** again.
-- Make sure the current profile is imported in SFA.
-- In SFA per-app mode, select BPSR.
+Make sure you are using the **new RC.15 profile**, not the old RC.13/RC.14 profile. In SFA, delete/disable the old BPSR Relay profile, then use **Start Phone Setup** on the PC and scan the new QR.
+
+### Firewall says Network is Public
+
+Click **Allow Firewall**. Only approve changing it to **Private** when this is your trusted home/private LAN. The relay remains blocked on a Public network.
+
+### Phone cannot reach the PC
+
+Confirm:
+
+- phone and PC are on the same router/LAN
+- the selected PC IP is still correct
+- Windows network is Private
+- Firewall shows Ready
+- no guest-Wi-Fi/client-isolation feature is separating the phone from the PC
 
 ### DPS meter shows nothing
 
-- Set the meter to `StarSEA`.
-- If it asks for Network Device, choose your physical Wi-Fi/Ethernet adapter.
-- The meter itself must support the current BPSR protocol/data format.
+Use **StarSEA** as the capture/process target. Do not target BPSRMobileFront. If the meter also asks for a physical adapter, select the PC Ethernet/Wi-Fi adapter.
 
-### DPS is exactly doubled
+### DPS appears doubled
 
-The current design exposes only one clear BPSR game-server path. Close any old `BPSRMobileFront`, `BPSRRelayIngress`, or foreign `StarSEA` relay process. **Run Check** will detect these conditions.
+Stop the relay, close old relay processes, and run **Prepare Relay** again. RC.15 checks for foreign/duplicate `StarSEA`, `BPSRMobileFront`, and legacy `BPSRRelayIngress` processes before starting.
 
-### Old relay found
+## Latency design
 
-Close the old relay app/process. If unsure, restart the PC and open the new manager again.
+Latency remains a primary goal:
 
-## Safety and package contents
+- no protocol sniffing
+- no multiplexing
+- no local AI or heavy background service
+- direct StarSEA outbound to the game server
+- localhost-only internal bridge
+- gameplay UI status polling checks only the two tracked relay PIDs plus their immutable start times; it does not repeatedly hash files, enumerate adapters, read configs, or run CIM queries while the relay is healthy
 
-The release is **EXE-first**: normal users open `BPSR Relay Manager.exe`.
+The extra localhost SOCKS hop is retained because it is the known Clean v4 shape that provides the clean StarSEA capture target and previously worked in the real setup.
 
-The release ZIP contains the small launcher plus the manager scripts. It does **not** bundle `sing-box.exe`, `StarSEA.exe`, relay credentials, PID state, or generated phone profiles.
+## Package safety
 
-**Prepare Relay** downloads only the pinned official SagerNet sing-box release and requires its official SHA256 digest to match before use.
+The release is **EXE-first**: users open `BPSR Relay Manager.exe`.
 
-Runtime files stay local under `.runtime/`. Generated phone files stay under `output/`.
+The package does not bundle:
+
+- `sing-box.exe`
+- `StarSEA.exe`
+- `BPSRMobileFront.exe`
+- relay credentials
+- PID/runtime state
+
+The manager downloads and verifies the pinned tested sing-box runtime when Prepare Relay is run, then creates its runtime copies locally.
+
+The launcher is currently unsigned, so Windows SmartScreen may show a reputation warning until a real Authenticode code-signing certificate is used.
 
 ## Release status
 
-RC.13 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.
+RC.15 is an automated-test release candidate, **not** stable v1.0.0 yet.
 
-Before stable release, a real Android + Windows test still needs to confirm:
+Before stable release, complete a real Android + Windows + BPSR field test and confirm:
 
-- `BPSR Relay Manager.exe` opens normally
-- SFA imports and starts the generated profile
-- BPSR connects and plays normally
+- the new RC.15 SFA profile imports and starts
+- BPSR connects and plays normally through SFA
 - gameplay latency is acceptable
-- at least one compatible DPS meter reads/parses `StarSEA` correctly
+- the compatible DPS meter reads `StarSEA`
 - DPS is not doubled
 
-After that live test passes, the source version can be changed to `1.0.0`, final CI must pass on the exact commit, PR #1 can be merged, and the guarded stable Release workflow can publish the ZIP + SHA256.
+Only after that real test passes should the source version be changed to `1.0.0`, the PR merged, exact-main CI validated, and stable release published.
 
 ## Disclaimer
 
-This is an unofficial community helper. It is not affiliated with or endorsed by the BPSR developers/publisher, any DPS-meter project, SagerNet, sing-box, or QuickChart.
-
-
-### Windows network says Public
-Click **Allow Firewall**. Only approve changing it to **Private** when this is your trusted home/private LAN. The relay stays blocked on Public networks.
+This is an unofficial community helper. It is not affiliated with or endorsed by the BPSR developers/publisher, any DPS-meter project, SagerNet, or sing-box.
