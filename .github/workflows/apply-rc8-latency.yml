@@ -1,0 +1,40 @@
+name: Apply RC8 Latency Patch
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - '.github/workflows/apply-rc8-latency.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/user-friendly-manager
+
+      - name: Apply RC8 latency changes
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyRc8LatencyPatch.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit audited source changes
+        shell: powershell
+        run: |
+          git config user.name "MrEz"
+          git config user.email "39240221+Zudin987@users.noreply.github.com"
+          git add -- 'scripts/BPSRRelayManager.ps1' 'README.md'
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "Minimize RC8 gameplay status polling"
+            git push origin HEAD:feature/user-friendly-manager
+          }
