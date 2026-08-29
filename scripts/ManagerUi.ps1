@@ -167,23 +167,42 @@ function Close-OldRelayPrompt {
 
     foreach ($item in $items) {
         try {
-            $current = Get-Process -Id ([int]$item.Id) -ErrorAction Stop
-            if ([string]$current.ProcessName -ne [string]$item.Name) { continue }
+            if ([string]::IsNullOrWhiteSpace([string]$item.StartUtc)) {
+                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its start-time identity could not be recorded. Refresh and try again.')
+                continue
+            }
+
+            # Parse the recorded identity up front so malformed state is rejected
+            # before any process-management decision is made.
+            $expectedStart = [DateTime]::Parse([string]$item.StartUtc)
+
+            $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)
+            if ([string]::IsNullOrWhiteSpace($expectedPath)) {
+                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its executable name is not managed by this project.')
+                continue
+            }
+
+            # Re-check PID + exact project executable path + start time immediately
+            # before Stop-Process. A same-named unrelated process must never be killed.
+            if (-not (Test-ExpectedProcess -ProcessId ([int]$item.Id) -ExpectedPath $expectedPath -ExpectedStartUtc ([string]$item.StartUtc))) {
+                Add-Log ('Skipped ' + $item.Name + ' PID ' + $item.Id + ' because it is not the exact project relay process recorded by path/start time.')
+                continue
+            }
+
             Stop-Process -Id ([int]$item.Id) -Force -ErrorAction Stop
-            Add-Log ('Closed old relay ' + $item.Name + ' (PID ' + $item.Id + ') after user confirmation.')
+            Add-Log ('Closed old project relay ' + $item.Name + ' (PID ' + $item.Id + ') after PID/path/start-time verification and user confirmation.')
         }
         catch {
             Add-Log ('Could not close old relay PID ' + $item.Id + ': ' + $_.Exception.Message)
         }
     }
-
     Start-Sleep -Milliseconds 150
     $remaining = @(Get-ForeignRelayProcesses)
     Update-Status
     if ($remaining.Count -gt 0) {
         $left = (@($remaining | ForEach-Object { $_.Name + '.exe (PID ' + $_.Id + ')' }) -join ', ')
         [System.Windows.Forms.MessageBox]::Show(
-            "Windows could not close:`r`n`r`n$left`r`n`r`nRestart your PC, then try again.",
+            "Windows could not safely close:`r`n`r`n$left`r`n`r`nTry Prepare Relay again, or restart your PC.",
             'Could not close old relay',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -301,7 +320,7 @@ function Show-Preflight {
     }
 
     $names = ($fails.Name -join ' ')
-    if ($names -match 'Duplicate relay|TCP') {
+    if ($names -match 'Duplicate relay|TCP|UDP') {
         $message = "An old relay or another app is still using the relay.`r`n`r`nClose it or restart your PC."
     }
     elseif ($names -match 'LAN IP') {
@@ -333,10 +352,10 @@ function Update-UiButtonStates {
 
     if ($script:btnSetup)       { $script:btnSetup.Enabled = -not $Running }
     if ($script:btnFirewall)    { $script:btnFirewall.Enabled = -not $Running }
-    if ($script:btnShare)       { $script:btnShare.Enabled = (-not $Running) -and $ProfileReady -and (-not $ForeignRelay) }
+    if ($script:btnShare)       { $script:btnShare.Enabled = (-not $Running) -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnQr)          { $script:btnQr.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
     if ($script:btnUrl)         { $script:btnUrl.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
-    if ($script:btnPreflight)   { $script:btnPreflight.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }
+    if ($script:btnPreflight)   { $script:btnPreflight.Enabled = -not $Running }
     if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnStop)        { $script:btnStop.Enabled = $Running }
     if ($script:btnStopDetails) { $script:btnStopDetails.Enabled = $Running }
@@ -549,13 +568,17 @@ foreach ($candidate in $candidates) {
         $seen[$candidate.IP] = $true
     }
 }
-if ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
+$existingProfileIp = Get-ProfilePcIp
+if (-not [string]::IsNullOrWhiteSpace($existingProfileIp) -and $script:cmbIp.Items.Contains($existingProfileIp) -and (Test-LocalIpAssigned $existingProfileIp)) {
+    $script:cmbIp.SelectedItem = $existingProfileIp
+}
+elseif ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
 $script:cmbIp.Add_SelectedIndexChanged({ Update-Status })
 $script:cmbIp.Add_Leave({ Update-Status })
 
 $step1 = New-UiCard -X 0 -Y 80 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step1 -Text '1. Prepare Relay' -Y 10)
-[void](Add-CardHelp -Parent $step1 -Text 'Create v1.0.0 compatibility profile. Do this first.' -Y 36 -Width 338 -Height 24)
+[void](Add-CardHelp -Parent $step1 -Text 'Create/repair the field-tested compatibility profile. Do this first.' -Y 36 -Width 338 -Height 24)
 $script:btnSetup = New-UiButton -Text 'Prepare Relay' -X 382 -Y 32 -Width 148 -Height 30 -Primary
 $script:btnSetup.Add_Click({ Invoke-PrepareRelay })
 $step1.Controls.Add($script:btnSetup)
@@ -572,11 +595,24 @@ $setupPanel.Controls.Add($step2)
 # Compatibility marker for legacy static check only: -Text 'Send to Phone'
 $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
 [void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
-[void](Add-CardHelp -Parent $step3 -Text 'Remove old RC.14 profile, then scan the new v1.0.0 QR.' -Y 34 -Width 500 -Height 23)
+[void](Add-CardHelp -Parent $step3 -Text 'First setup or profile refresh: scan the current QR in SFA.' -Y 34 -Width 500 -Height 23)
 $script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
 $script:btnShare.Add_Click({
-    try { Start-ProfileShare; Show-ShareQr }
-    catch { Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception }
+    try { Start-ProfileShare }
+    catch {
+        Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception
+        return
+    }
+    try { Show-ShareQr }
+    catch {
+        Add-Log ('WARNING: phone setup is running, but the QR could not open: ' + $_.Exception.Message)
+        [System.Windows.Forms.MessageBox]::Show(
+            "Phone setup is running, but the QR could not open.`r`n`r`nClick Copy SFA Link and send/open that link on your phone.",
+            'Phone setup started',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+    }
 })
 $step3.Controls.Add($script:btnShare)
 $script:btnQr = New-UiButton -Text 'Show SFA QR' -X 172 -Y 62 -Width 116 -Height 30
@@ -646,9 +682,9 @@ $statusPanel.Controls.Add($nextCard)
 $quickCard = New-UiCard -X 0 -Y 322 -Width 316 -Height 100
 [void](Add-CardTitle -Parent $quickCard -Text 'Daily use' -Y 10)
 $quickText = New-Object System.Windows.Forms.Label
-$quickText.Text = "After the first setup:`r`nOpen app  ->  Start Relay  ->  Play"
+$quickText.Text = "After the first setup:`r`nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR"
 $quickText.Location = New-Object System.Drawing.Point(16, 43)
-$quickText.Size = New-Object System.Drawing.Size(284, 44)
+$quickText.Size = New-Object System.Drawing.Size(284, 52)
 $quickText.ForeColor = $Ui.Neutral
 $quickCard.Controls.Add($quickText)
 $statusPanel.Controls.Add($quickCard)
@@ -756,13 +792,13 @@ $helpTab.Controls.Add($helpTitle)
 $androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
 [void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
 $androidLeft = New-Object System.Windows.Forms.Label
-$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. Delete/disable old RC.14 profile.`r`n`r`n6. PC: Start Phone Setup."
+$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. If an old test profile exists, remove it.`r`n`r`n6. PC: Start Phone Setup."
 $androidLeft.Location = New-Object System.Drawing.Point(16, 43)
 $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
 $androidLeft.ForeColor = $Ui.Neutral
 $androidHelp.Controls.Add($androidLeft)
 $androidRight = New-Object System.Windows.Forms.Label
-$androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. Tap + > Scan QR Code.`r`n`r`n9. Scan the PC QR.`r`n`r`n10. Confirm BPSR Relay.`r`n`r`n11. Settings > Per-app proxy > BPSR only.`r`n`r`n12. Start SFA. Allow VPN permission.`r`n`r`n13. PC: Start Relay. Open BPSR."
+$androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. Tap + > Scan QR Code.`r`n`r`n9. Scan the PC QR.`r`n`r`n10. Confirm BPSR Relay.`r`n`r`n11. Settings > Per-app proxy > BPSR only.`r`n`r`n12. PC: Start Relay.`r`n13. Phone: Start SFA. Allow VPN permission.`r`n14. Open BPSR."
 $androidRight.Location = New-Object System.Drawing.Point(430, 43)
 $androidRight.Size = New-Object System.Drawing.Size(400, 240)
 $androidRight.ForeColor = $Ui.Neutral
@@ -792,7 +828,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: re-import v1.0.0 QR.`r`n`r`nNo DPS: StarSEA only."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: run Phone Setup, scan QR.`r`n`r`nNo DPS: StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
@@ -889,6 +925,21 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
     if ($targetValue.Text -ne 'StarSEA') { throw 'DPS target card changed unexpectedly.' }
+    $cleanupSource = (Get-Command Close-OldRelayPrompt -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($needle in @('Get-ExpectedRelayPath -ProcessName','Test-ExpectedProcess -ProcessId ([int]$item.Id) -ExpectedPath $expectedPath -ExpectedStartUtc','same-named unrelated process must never be killed')) {
+        if (-not $cleanupSource.Contains($needle)) { throw ('Stale-process safety self-test failed: ' + $needle) }
+    }
+    if ($cleanupSource.Contains('$current.ProcessName -ne [string]$item.Name')) { throw 'Unsafe name/start-time-only stale cleanup was reintroduced.' }
+
+    $stopSource = (Get-Command Stop-Relay -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($needle in @('PID state file missing/unreadable; using in-memory relay identity for safe stop.','$script:trackedStarPid','$script:trackedFrontPid','Test-ExpectedProcess')) {
+        if (-not $stopSource.Contains($needle)) { throw ('PID recovery self-test failed: ' + $needle) }
+    }
+
+    foreach ($needle in @('12. PC: Start Relay.','13. Phone: Start SFA. Allow VPN permission.','14. Open BPSR.')) {
+        if (-not $androidRight.Text.Contains($needle)) { throw ('Android startup-order self-test failed: ' + $needle) }
+    }
+    if ($androidRight.Text.Contains('12. Start SFA. Allow VPN permission.')) { throw 'Old phone-before-PC startup order was reintroduced.' }
 
     if (-not [string]::IsNullOrWhiteSpace($env:BPSR_RELAY_UI_CAPTURE_DIR)) {
         $captureDir = $env:BPSR_RELAY_UI_CAPTURE_DIR

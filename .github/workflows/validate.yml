@@ -24,18 +24,17 @@ jobs:
             'scripts\BuildRelease.ps1'
           )
           foreach ($relative in $paths) {
-            $path = Join-Path $env:GITHUB_WORKSPACE $relative
             $tokens = $null
             $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:GITHUB_WORKSPACE $relative), [ref]$tokens, [ref]$errors)
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error ((${relative} + ': ') + $_.Message) }
+              $errors | ForEach-Object { Write-Error ($relative + ': ' + $_.Message) }
               exit 1
             }
-            Write-Host ($relative + ' syntax OK.')
           }
+          Write-Host 'PowerShell syntax OK.'
 
-      - name: Check latency, v4 compatibility and single-count invariants
+      - name: Check v1.0.1 topology latency and hardening invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
@@ -48,21 +47,17 @@ jobs:
           $smoke = Get-Content 'scripts\TestRelaySmoke.ps1' -Raw
 
           $required = @(
-            "`$ManagerVersion = '1.0.0'",
+            "`$ManagerVersion = '1.0.1'",
             "`$TestedSingBoxVersion = 'v1.13.19'",
             '$FrontPort = 10808',
             '$InternalPortStart = 18080',
             '$InternalPortEnd = 18180',
-            "Join-Path `$Runtime 'BPSRMobileFront.exe'",
-            "Join-Path `$Runtime 'StarSEA.exe'",
-            "Join-Path `$ConfigDir 'pc-relay-front.json'",
-            "Join-Path `$ConfigDir 'pc-relay-back.json'",
-            "mode = 'v4-compatible-socks5'",
-            "type = 'socks'",
-            "server = '127.0.0.1'",
-            "final = 'bpsr-pc'",
-            'route_exclude_address',
-            "stack = 'system'",
+            '$MaxLogBytes = 2097152',
+            'function Rotate-LogIfNeeded',
+            'function Ensure-InternalBridgePortAvailable',
+            'function Get-ListeningUdpEndpoints',
+            'Get-NetUDPEndpoint -LocalPort',
+            '[void](Ensure-InternalBridgePortAvailable -PcIp $pcIp)',
             'function Assert-Topology',
             'function Get-PreflightChecks',
             'function Get-DiagnosticsText',
@@ -71,6 +66,18 @@ jobs:
             'function Load-TrackedRelayIdentity',
             'function Set-TrackedRelayIdentity',
             'function Clear-TrackedRelayIdentity',
+            'function Test-ExpectedProcess',
+            '$trackedPairHealthy = $starOk -and $frontOk',
+            'StartUtc = $startUtc',
+            "Join-Path `$Runtime 'BPSRMobileFront.exe'",
+            "Join-Path `$Runtime 'StarSEA.exe'",
+            "Join-Path `$ConfigDir 'pc-relay-front.json'",
+            "Join-Path `$ConfigDir 'pc-relay-back.json'",
+            "mode = 'v4-compatible-socks5'",
+            "server = '127.0.0.1'",
+            "final = 'bpsr-pc'",
+            'route_exclude_address',
+            "stack = 'system'",
             'Universal DPS meter capture target: StarSEA',
             'Do not target BPSRMobileFront',
             '-Protocol TCP',
@@ -80,28 +87,51 @@ jobs:
             "Join-Path `$PSScriptRoot 'ManagerUi.ps1'"
           )
           foreach ($needle in $required) {
-            if (-not $text.Contains($needle)) {
-              Write-Error ('Missing critical v1.0.0 invariant: ' + $needle)
-              exit 1
-            }
+            if (-not $text.Contains($needle)) { throw ('Missing v1.0.1 invariant: ' + $needle) }
           }
 
           if ($text.Contains('New-Object System.Windows.Forms.Form')) {
-            Write-Error 'UI was re-embedded into the latency-sensitive relay engine.'
-            exit 1
+            throw 'UI was re-embedded into the latency-sensitive relay engine.'
           }
 
+          # The field-tested Android -> BPSRMobileFront -> localhost StarSEA topology must not change.
           $writeStart = $text.IndexOf('function Write-RelayConfigs', [System.StringComparison]::Ordinal)
           $writeEnd = $text.IndexOf('function Get-ProfilePcIp', $writeStart, [System.StringComparison]::Ordinal)
           if ($writeStart -lt 0 -or $writeEnd -le $writeStart) { throw 'Could not isolate Write-RelayConfigs.' }
           $writeSegment = $text.Substring($writeStart, $writeEnd - $writeStart)
-          foreach ($forbidden in @("type = 'shadowsocks'", '2022-blake3-aes-128-gcm', 'BPSRRelayIngress', 'multiplex')) {
-            if ($writeSegment.Contains($forbidden)) {
-              throw ('RC.14 transport leaked back into v1.0.0 generated configs: ' + $forbidden)
-            }
-          }
           foreach ($needle in @("type = 'socks'", "server = '127.0.0.1'", "final = 'bpsr-pc'", 'route_exclude_address')) {
-            if (-not $writeSegment.Contains($needle)) { throw ('v1.0.0 config generator is missing: ' + $needle) }
+            if (-not $writeSegment.Contains($needle)) { throw ('Field-tested topology generator is missing: ' + $needle) }
+          }
+          foreach ($forbidden in @("type = 'shadowsocks'", '2022-blake3-aes-128-gcm', 'BPSRRelayIngress', 'multiplex')) {
+            if ($writeSegment.Contains($forbidden)) { throw ('Forbidden old transport leaked into generated configs: ' + $forbidden) }
+          }
+
+          # Phone setup must not start before the Private-LAN firewall is ready.
+          $shareStart = $text.IndexOf('function Start-ProfileShare', [System.StringComparison]::Ordinal)
+          $shareEnd = $text.IndexOf('function Get-ProfileDownloadUrl', $shareStart, [System.StringComparison]::Ordinal)
+          if ($shareStart -lt 0 -or $shareEnd -le $shareStart) { throw 'Could not isolate Start-ProfileShare.' }
+          $shareSegment = $text.Substring($shareStart, $shareEnd - $shareStart)
+          if (-not $shareSegment.Contains('Test-FirewallReady -PcIp $pcIp')) { throw 'Phone setup no longer requires a ready firewall.' }
+          if (-not $shareSegment.Contains('clipboard was busy')) { throw 'Clipboard failure tolerance is missing.' }
+
+          # Gameplay status polling must stay tiny even after hardening.
+          $engineHotStart = $text.IndexOf('function Get-RelayTrackedRunning', [System.StringComparison]::Ordinal)
+          $engineHotEnd = $text.IndexOf('function Start-ProfileShare', $engineHotStart, [System.StringComparison]::Ordinal)
+          if ($engineHotStart -lt 0 -or $engineHotEnd -le $engineHotStart) { throw 'Could not isolate gameplay relay hot path.' }
+          $engineHot = $text.Substring($engineHotStart, $engineHotEnd - $engineHotStart)
+          foreach ($forbidden in @('Get-FileHash','Get-CimInstance','Read-JsonFile','Get-NetIPConfiguration','Get-NetAdapter','Get-NetTCPConnection','Get-NetUDPEndpoint')) {
+            if ($engineHot.Contains($forbidden)) { throw ('Gameplay relay hot path regressed to heavy work: ' + $forbidden) }
+          }
+          if (($engineHot.Split(@('Get-Process'), [System.StringSplitOptions]::None).Count - 1) -ne 2) {
+            throw 'Gameplay relay hot path must check exactly the two tracked relay processes.'
+          }
+
+          $uiHotStart = $ui.IndexOf('if (Get-RelayTrackedRunning) {', [System.StringComparison]::Ordinal)
+          $uiHotReturn = if ($uiHotStart -ge 0) { $ui.IndexOf('return', $uiHotStart, [System.StringComparison]::Ordinal) } else { -1 }
+          if ($uiHotStart -lt 0 -or $uiHotReturn -lt 0) { throw 'Could not isolate UI running-status hot path.' }
+          $uiHot = $ui.Substring($uiHotStart, ($uiHotReturn - $uiHotStart + 6))
+          foreach ($forbidden in @('Test-RuntimeIntegrity','Test-FirewallReady','Get-ProfilePcIp','Get-LanIPv4Candidates','Get-FileHash','Get-CimInstance','Get-NetUDPEndpoint')) {
+            if ($uiHot.Contains($forbidden)) { throw ('Gameplay UI hot path regressed to heavy work: ' + $forbidden) }
           }
 
           $uiRequired = @(
@@ -114,42 +144,22 @@ jobs:
             "-Text 'What to do next'",
             "`$helpTitle.Text = 'Simple Help'",
             "`$targetValue.Text = 'StarSEA'",
-            'Remove old RC.14 profile',
             'Never BPSRMobileFront',
+            '$script:btnPreflight.Enabled = -not $Running',
+            '$ProfileReady -and $FirewallReady -and (-not $ForeignRelay)',
+            'PC Start Relay  ->  Phone Start SFA  ->  Open BPSR',
+            '$existingProfileIp = Get-ProfilePcIp',
+            '$expectedStart = [DateTime]::Parse([string]$item.StartUtc)',
+            'Phone setup is running, but the QR could not open',
             'BPSR_RELAY_UI_SELF_TEST',
             'UI SELF-TEST PASS'
           )
           foreach ($needle in $uiRequired) {
-            if (-not $ui.Contains($needle)) {
-              Write-Error ('Simple UI invariant is missing: ' + $needle)
-              exit 1
-            }
+            if (-not $ui.Contains($needle)) { throw ('Missing v1.0.1 UI invariant: ' + $needle) }
           }
 
-          $uiHotStart = $ui.IndexOf('if (Get-RelayTrackedRunning) {', [System.StringComparison]::Ordinal)
-          $uiHotReturn = if ($uiHotStart -ge 0) { $ui.IndexOf('return', $uiHotStart, [System.StringComparison]::Ordinal) } else { -1 }
-          if ($uiHotStart -lt 0 -or $uiHotReturn -lt 0) { throw 'Could not identify UI running-status hot path.' }
-          $uiHot = $ui.Substring($uiHotStart, ($uiHotReturn - $uiHotStart + 6))
-          foreach ($forbidden in @('Test-RuntimeIntegrity', 'Test-FirewallReady', 'Get-ProfilePcIp', 'Get-LanIPv4Candidates', 'Get-FileHash', 'Get-CimInstance')) {
-            if ($uiHot.Contains($forbidden)) { throw ('Gameplay UI hot path regressed to heavy work: ' + $forbidden) }
-          }
-
-          $engineHotStart = $text.IndexOf('function Get-RelayTrackedRunning', [System.StringComparison]::Ordinal)
-          $engineHotEnd = $text.IndexOf('function Start-ProfileShare', $engineHotStart, [System.StringComparison]::Ordinal)
-          if ($engineHotStart -lt 0 -or $engineHotEnd -le $engineHotStart) { throw 'Could not isolate Get-RelayTrackedRunning.' }
-          $engineHot = $text.Substring($engineHotStart, $engineHotEnd - $engineHotStart)
-          foreach ($forbidden in @('Get-FileHash', 'Get-CimInstance', 'Read-JsonFile', 'Get-NetIPConfiguration', 'Get-NetAdapter', 'Get-NetTCPConnection')) {
-            if ($engineHot.Contains($forbidden)) { throw ('Gameplay relay hot path regressed to heavy work: ' + $forbidden) }
-          }
-          if (($engineHot.Split(@('Get-Process'), [System.StringSplitOptions]::None).Count - 1) -ne 2) {
-            throw 'Gameplay relay hot path must check exactly the two tracked relay processes.'
-          }
-
-          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'authenticated SOCKS5', 'trusted home/private LAN', 'v4-compatible', 'BPSR Relay Manager.exe', 'EXE-first', 'Home', 'Details', 'Help', 'Prepare Relay', 'Start Relay')) {
-            if (-not $readme.Contains($needle)) {
-              Write-Error ('Documentation invariant is missing: ' + $needle)
-              exit 1
-            }
+          foreach ($needle in @('DPS-meter agnostic','Any DPS meter that can parse BPSR traffic','Multiple DPS meters','authenticated SOCKS5','trusted home/private LAN','v4-compatible','BPSR Relay Manager.exe','EXE-first','Home','Details','Help','Prepare Relay','Start Relay')) {
+            if (-not $readme.Contains($needle)) { throw ('Documentation invariant is missing: ' + $needle) }
           }
 
           if ($text.Contains("[ordered]@{ action = 'sniff' }")) { throw 'Protocol sniff action was reintroduced.' }
@@ -158,23 +168,47 @@ jobs:
           if (-not $text.Contains('multiplex')) { throw 'Self-test no longer guards against multiplexing.' }
 
           if (-not $bat.Contains('scripts\LaunchManager.ps1')) { throw 'Repository BAT fallback no longer uses startup wrapper.' }
-          foreach ($needle in @('ProcessStartInfo', 'powershell.exe', '--launcher-self-test', 'CreateNoWindow = true', 'scripts')) {
-            if (-not $launcher.Contains($needle)) { throw ('Native launcher invariant missing: ' + $needle) }
+          foreach ($needle in @('ProcessStartInfo','powershell.exe','--launcher-self-test','CreateNoWindow = true','scripts')) {
+            if (-not $launcher.Contains($needle)) { throw ('Launcher invariant missing: ' + $needle) }
           }
-          foreach ($forbidden in @('10808', 'sing-box', 'StarSEA.exe', 'BPSRMobileFront.exe')) {
-            if ($launcher.Contains($forbidden)) { throw ('Native launcher must stay out of relay/network logic; found: ' + $forbidden) }
+          foreach ($forbidden in @('10808','sing-box','StarSEA.exe','BPSRMobileFront.exe')) {
+            if ($launcher.Contains($forbidden)) { throw ('Launcher entered relay/network logic: ' + $forbidden) }
           }
-          foreach ($needle in @('BPSR Relay Manager.exe', 'scripts\ManagerUi.ps1', '/target:winexe', '--launcher-self-test', 'must contain exactly one executable', "EntryPoint = 'BPSR Relay Manager.exe'")) {
-            if (-not $builder.Contains($needle)) { throw ('EXE-first package guard missing: ' + $needle) }
-          }
-          foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'Require green Validate run for exact commit', '--commit $env:GITHUB_SHA', 'BuildRelease.ps1', 'gh release create')) {
-            if (-not $release.Contains($needle)) { throw ('Stable release guard missing: ' + $needle) }
-          }
-          foreach ($needle in @('BPSRMobileFront', 'localhost StarSEA', '--proxy-user', '--socks5-hostname', 'V4-COMPAT RELAY SMOKE PASS')) {
-            if (-not $smoke.Contains($needle)) { throw ('V4-compatible smoke test missing: ' + $needle) }
+          foreach ($needle in @('BPSR Relay Manager.exe','scripts\ManagerUi.ps1','/target:winexe','--launcher-self-test','must contain exactly one executable',"EntryPoint = 'BPSR Relay Manager.exe'")) {
+            if (-not $builder.Contains($needle)) { throw ('Package guard missing: ' + $needle) }
           }
 
-          Write-Host 'Static v1.0.0 v4-compatible/latency/single-count/UI/package/release guards present.'
+          foreach ($needle in @('field_test_passed',"GITHUB_REF_NAME -ne 'main'",'compatible DPS-meter','Require green Validate run for exact commit','--commit $env:GITHUB_SHA','BuildRelease.ps1','cmd.exe /d /c','gh release create')) {
+            if (-not $release.Contains($needle)) { throw ('Stable release guard missing: ' + $needle) }
+          }
+          if ($release.Contains('gh release view $tag --repo ''${{ github.repository }}'' *> $null')) {
+            throw 'Known PowerShell gh release-view stderr bug was reintroduced.'
+          }
+          foreach ($needle in @('BPSRMobileFront','localhost StarSEA','--proxy-user','--socks5-hostname','V4-COMPAT RELAY SMOKE PASS')) {
+            if (-not $smoke.Contains($needle)) { throw ('V4-compatible smoke guard missing: ' + $needle) }
+          }
+
+          Write-Host 'Static v1.0.1 topology/latency/hardening/UI/package/release guards passed.'
+
+      - name: Verify Windows TCP and UDP conflict detection primitives
+        shell: powershell
+        run: |
+          $tcp = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+          $udp = $null
+          try {
+            $tcp.Start()
+            $port = [int]$tcp.LocalEndpoint.Port
+            $udp = New-Object System.Net.Sockets.UdpClient
+            $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Loopback, $port)))
+            Start-Sleep -Milliseconds 150
+            if (@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue).Count -eq 0) { throw 'TCP conflict primitive did not detect listener.' }
+            if (@(Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue).Count -eq 0) { throw 'UDP conflict primitive did not detect endpoint.' }
+            Write-Host ('TCP+UDP conflict detection primitives passed on port ' + $port + '.')
+          }
+          finally {
+            if ($udp) { $udp.Dispose() }
+            $tcp.Stop()
+          }
 
       - name: Test simple manager UI layout
         shell: powershell
@@ -192,7 +226,7 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Smoke-test v4-compatible two-stage relay data path
+      - name: Smoke-test field-tested two-stage relay data path
         shell: powershell
         run: |
           $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
@@ -212,8 +246,7 @@ jobs:
           $token = '0123456789abcdef0123456789abcdef'
           $port = Get-FreeTcpPort
           $args = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $env:GITHUB_WORKSPACE 'scripts\ServeProfile.ps1') + '"' +
-                  ' -BindIp 127.0.0.1 -Port ' + $port +
-                  ' -Token ' + $token +
+                  ' -BindIp 127.0.0.1 -Port ' + $port + ' -Token ' + $token +
                   ' -ProfilePath "' + $profile + '" -LifetimeSeconds 60'
           $server = Start-Process powershell.exe -ArgumentList $args -WindowStyle Hidden -PassThru
           try {
@@ -222,11 +255,11 @@ jobs:
             if ($server.HasExited) { throw 'Profile server exited before test request.' }
             $base = 'http://127.0.0.1:' + $port + '/' + $token + '/'
             $page = Invoke-WebRequest -Uri $base -UseBasicParsing
-            if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'Download SFA profile') { throw 'Profile landing page test failed.' }
+            if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'Open in SFA') { throw 'Profile landing page test failed.' }
             $head = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -Method Head -UseBasicParsing
             if ($head.StatusCode -ne 200) { throw 'Profile HEAD request failed.' }
             $server.Refresh()
-            if ($server.HasExited) { throw 'HEAD request incorrectly consumed the one-download profile share.' }
+            if ($server.HasExited) { throw 'HEAD request incorrectly consumed one-download share.' }
             $download = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -UseBasicParsing
             if ($download.StatusCode -ne 200 -or $download.Content -notmatch '"test"') { throw 'Profile download test failed.' }
             $server.WaitForExit(5000) | Out-Null
