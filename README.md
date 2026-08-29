@@ -31,7 +31,7 @@ You normally do not need to run Prepare Relay or re-import the profile again unl
 
 ## RC.15 compatibility architecture
 
-RC.15 intentionally matches the transport shape of the original Clean v4 setup:
+RC.15 intentionally uses the **v4-compatible** transport shape of the original Clean v4 setup:
 
 ```text
 Android BPSR
