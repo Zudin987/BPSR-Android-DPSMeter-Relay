@@ -19,9 +19,10 @@ Current stable release: **v1.0.1**
 7. On the PC, click **Start Phone Setup**.
 8. In SFA: **+ → Scan QR Code**, then import the newly generated v1.0.1 profile.
 9. In SFA per-app/proxy-app settings, select **BPSR only**.
-10. Start SFA.
-11. On the PC DPS meter, use **StarSEA** as the game/capture process. Do **not** target `BPSRMobileFront`.
-12. Click **Start Relay**, then open BPSR on Android.
+10. On the PC, click **Start Relay**.
+11. Start SFA on the phone.
+12. On the PC DPS meter, use **StarSEA** as the game/capture process. Do **not** target `BPSRMobileFront`.
+13. Open BPSR on Android.
 
 ### Daily use after setup
 
@@ -87,7 +88,7 @@ The generated SFA profile uses:
 
 `strict_route` is intentionally absent because the SFA Android build does not implement that TUN option.
 
-**Important:** v1.0.1 uses a different Android transport from RC.14. Do not reuse the old RC.14 SFA profile. Prepare Relay and import the new v1.0.1 QR/profile.
+**Important:** v1.0.1 uses the same field-tested Android transport as v1.0.0 and Clean v4. Do not reuse an incompatible RC.14 SFA profile. Prepare Relay and import the current v1.0.1 QR/profile when upgrading from those older test builds or when the PC LAN IP changes.
 
 ## Network safety
 
@@ -127,7 +128,7 @@ Short Android/SFA instructions and common fixes for non-technical users.
 
 ### BPSR stops connecting as soon as SFA starts
 
-Make sure you are using the **new v1.0.1 profile**, not the old RC.13/RC.14 profile. In SFA, delete/disable the old BPSR Relay profile, then use **Start Phone Setup** on the PC and scan the new QR.
+Make sure you are using the current v1.0.1 profile, not an incompatible RC.13/RC.14 profile. In SFA, delete/disable the old BPSR Relay profile, then use **Start Phone Setup** on the PC and scan the new QR.
 
 ### Firewall says Network is Public
 
@@ -184,7 +185,7 @@ The launcher is currently unsigned, so Windows SmartScreen may show a reputation
 
 **v1.0.1 is the current stable release.**
 
-The Clean-v4-compatible Android -> BPSRMobileFront -> localhost StarSEA path passed the real Android + Windows + SFA + BPSR + compatible DPS-meter field test, including normal gameplay connectivity, acceptable latency, DPS capture, and no doubled DPS.
+v1.0.1 keeps the same Clean-v4-compatible Android → BPSRMobileFront → localhost StarSEA path that was already validated in real Android + Windows + SFA + BPSR + compatible DPS-meter use. The v1.0.1 hardening changes focus on setup, stale-process safety, conflict detection, recovery, logging, and UI guidance without changing that gameplay relay topology.
 
 ## Disclaimer
 
