@@ -1,5 +1,6 @@
 name: Apply RC15 V4 Compatibility
 
+# retry after repairing all encoded patch chunks
 on:
   push:
     branches:
