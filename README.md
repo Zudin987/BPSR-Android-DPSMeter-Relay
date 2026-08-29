@@ -1,6 +1,8 @@
 # BPSR Android DPSMeter Relay
 
-A lightweight Windows helper for routing **Blue Protocol: Star Resonance Android traffic** through a PC so ZDPS or another compatible packet-based DPS meter can observe a clean `StarSEA` process stream.
+A lightweight Windows helper for routing **Blue Protocol: Star Resonance Android traffic** through a PC so compatible packet-based DPS meters can observe a clean `StarSEA.exe` traffic stream.
+
+The relay is intentionally **DPS-meter agnostic**. It does not depend on ZDPS and does not require a specific meter. Any DPS meter that can parse BPSR traffic and can capture/detect the `StarSEA` process/network stream may use the relay. ZDPS is only one example.
 
 The design priorities are intentionally strict:
 
@@ -8,7 +10,19 @@ The design priorities are intentionally strict:
 2. **Prevent the same clear BPSR payload from appearing twice on the PC network path**
 3. Convenience/features only after those two goals
 
-## Why the relay is now single-process
+## How the universal capture target works
+
+The relay does not create a special virtual network named `StarSEA`. Instead, the Windows relay process itself is named:
+
+```text
+StarSEA.exe
+```
+
+That process owns the clear outbound BPSR connection to the game server. A compatible DPS meter can therefore use `StarSEA` as its process/executable capture target, or observe the same physical-adapter traffic if that meter captures by network device instead.
+
+Multiple compatible DPS meters may run at the same time. The relay does not reserve or lock the capture stream for one application.
+
+## Why the relay is single-process
 
 Older relay designs used two PC proxy processes:
 
@@ -16,9 +30,9 @@ Older relay designs used two PC proxy processes:
 Android -> front proxy -> localhost bridge -> StarSEA -> game server
 ```
 
-That separated process names, but it also added another proxy hop. A raw SOCKS phone-to-PC leg could still place a second clear copy of the BPSR payload on a network adapter.
+That added another proxy hop and could expose a second clear copy of the BPSR payload to packet parsers.
 
-The current design is simpler:
+The current gameplay path is:
 
 ```text
 Android BPSR
@@ -33,17 +47,17 @@ StarSEA.exe on PC :10902
 BPSR game server
 ```
 
-The phone-to-PC copy is encrypted. The clear BPSR payload appears only on the `StarSEA <-> game server` side, which is the side a DPS meter should parse.
+The phone-to-PC copy is encrypted. The clear BPSR payload appears only on the `StarSEA <-> game server` side, which is the side compatible DPS meters should parse.
 
-This removes the old `BPSRMobileFront.exe` / localhost bridge entirely while retaining a clean `StarSEA` capture target.
+This removes the old `BPSRMobileFront.exe` / localhost bridge while keeping a stable universal `StarSEA` capture target.
 
 ## Requirements
 
 - Windows 10/11 PC
 - Android phone running BPSR
 - SFA / sing-box-compatible Android client
-- ZDPS or another compatible DPS meter on the PC
-- Phone and PC on the same reachable LAN/Wi-Fi
+- one or more compatible DPS meters that can parse BPSR and capture/detect `StarSEA` traffic
+- phone and PC on the same reachable LAN/Wi-Fi
 - Windows network normally set to **Private** for the manager-created firewall rule
 
 You do **not** manually download, rename, or configure sing-box on Windows.
@@ -127,11 +141,25 @@ Import the JSON into SFA.
 
 In SFA, use per-app / selected-app routing and leave only BPSR selected after testing.
 
-### 5. Configure ZDPS
+### 5. Configure your DPS meter
 
-ZDPS uses a network device plus executable-name capture preference. There is no relay `127.0.0.1:10903` setting in ZDPS.
+The universal relay-side target is:
 
-Use:
+```text
+Process / executable:
+  StarSEA
+
+Traffic location:
+  the physical PC Wi-Fi/Ethernet adapter used by the relay
+```
+
+Exact labels differ between DPS meters. The important part is that the meter observes/parses the clear `StarSEA <-> BPSR server` stream and does **not** try to use an old `BPSRMobileFront` or `BPSRRelayIngress` process.
+
+If a meter captures by executable/process name, use `StarSEA` (normally without `.exe` when the UI expects an executable name). If it captures by network device, select the physical Wi-Fi/Ethernet adapter carrying StarSEA's outbound game traffic.
+
+#### ZDPS example
+
+ZDPS is supported as one example, not as a dependency:
 
 ```text
 Network Device:
@@ -144,9 +172,9 @@ Custom BPSR Executable Name:
   StarSEA
 ```
 
-Use `StarSEA` without `.exe`.
+There is no relay `127.0.0.1:10903` setting in the current architecture.
 
-The manager has **Copy ZDPS Settings** to copy these settings.
+The manager's **Copy DPS Meter Notes** button copies the universal target plus the ZDPS example.
 
 ### 6. `PREFLIGHT CHECK`
 
@@ -217,9 +245,9 @@ Other Android traffic remains direct.
 
 The relay does **not** limit you to one DPS meter application.
 
-You can run multiple compatible meters at once. Each meter should observe the same `StarSEA` clear game-server stream independently.
+You can run multiple compatible meters at once. Each meter may independently observe the same `StarSEA` clear game-server stream.
 
-The relay only prevents duplicate relay/network paths; it does not block multiple viewer applications.
+The anti-double-count protection applies to **duplicate relay/network paths**, not to the number of DPS meter applications you open.
 
 ## Stale IP detection
 
@@ -248,6 +276,7 @@ Then:
 - relay-port ownership
 - topology validation
 - routed BPSR ports
+- universal DPS capture target (`StarSEA`)
 
 It intentionally excludes relay passwords/profile secrets.
 
@@ -298,9 +327,11 @@ Check:
 - BPSR is selected in SFA per-app mode
 - relay status says RUNNING
 
-### ZDPS shows no data
+### DPS meter shows no data
 
-Check ZDPS:
+First confirm the meter itself supports the current BPSR protocol/data format. Then check that it is observing `StarSEA` or the physical adapter carrying StarSEA's outbound game traffic.
+
+For ZDPS specifically:
 
 ```text
 Network Device: physical Wi-Fi/Ethernet adapter
@@ -315,6 +346,8 @@ Then run **Copy Diagnostics** and **Preflight Check**.
 The current relay should not expose two clear copies of the BPSR payload on the PC network path: the phone-to-PC leg is encrypted.
 
 Still verify that you are using the current single-process build and there are no old `BPSRMobileFront`, `BPSRRelayIngress`, or foreign `StarSEA` processes running. Preflight blocks these conditions.
+
+Opening two different DPS meters is not, by itself, a duplicate-relay condition; each meter can independently consume the same StarSEA stream.
 
 ### Setup says a foreign/legacy relay exists
 
@@ -335,4 +368,4 @@ The manager deliberately refuses to kill an untracked process just because it ha
 
 ## Disclaimer
 
-This is an unofficial community helper and is not affiliated with, endorsed by, or supported by the BPSR developers/publisher, ZDPS, SagerNet, sing-box, or QuickChart.
+This is an unofficial community helper and is not affiliated with, endorsed by, or supported by the BPSR developers/publisher, any DPS-meter project, SagerNet, sing-box, or QuickChart. ZDPS is mentioned only as a configuration example.
