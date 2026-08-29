@@ -1,0 +1,33 @@
+name: Fix v1.0.1 problem-help fit
+
+on:
+  push:
+    branches:
+      - feature/v1.0.1-hardening
+    paths:
+      - .github/workflows/fix-v101-problem-help-fit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message == 'Run v1.0.1 problem-help fit fix'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v1.0.1-hardening
+      - name: Apply and commit fit fix
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\FixV101ProblemHelpFit.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm '.\scripts\FixV101ProblemHelpFit.ps1'
+          git add '.\scripts\ManagerUi.ps1'
+          git commit -m 'Fix v1.0.1 troubleshooting text fit'
+          git push origin HEAD:feature/v1.0.1-hardening
