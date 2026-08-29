@@ -1,0 +1,93 @@
+name: Publish RC14 Prerelease
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - .github/workflows/publish-rc14-prerelease.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: Zudin987/BPSR-Android-DPSMeter-Relay
+      TAG: v1.0.0-rc.14
+      VALIDATED_SHA: c4e774a907fd26689a2362629400e26149520cc9
+      VALIDATE_RUN: '33242003187'
+      EXPECTED_SHA256: 62d16c44c779b895620af5c9084f13e8462499858b245cb55c854089b87e3ce1
+    steps:
+      - name: Confirm release does not already exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to replace it." >&2
+            exit 1
+          fi
+      - name: Confirm validated run belongs to exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(gh run view "$VALIDATE_RUN" --repo "$REPO" --json headSha --jq .headSha)"
+          conclusion="$(gh run view "$VALIDATE_RUN" --repo "$REPO" --json conclusion --jq .conclusion)"
+          test "$actual_sha" = "$VALIDATED_SHA"
+          test "$conclusion" = "success"
+      - name: Download exact validated package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-artifact
+          gh run download "$VALIDATE_RUN" --repo "$REPO" --name validated-release-candidate --dir release-artifact
+          test -f release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip
+          test -f release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip.sha256
+          actual="$(sha256sum release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          grep -Fq "$EXPECTED_SHA256" release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip.sha256
+      - name: Publish prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          ## BPSR Android DPSMeter Relay v1.0.0-rc.14
+
+          Fixes a real field-test issue found in RC.13 when Windows Ethernet/Wi-Fi is set to **Public**.
+
+          ### RC.14 fix
+          - Firewall readiness now requires the selected Windows network to actually be **Private**.
+          - A Public network no longer shows a false green **Firewall: Ready** state.
+          - **Start Relay** is blocked until the safe Private-LAN firewall rule is active.
+          - Clicking **Allow Firewall** on a Public network explains the issue and can change that selected trusted LAN to Private after explicit approval/UAC.
+          - Diagnostics now clearly report when a Public network is blocking phone → PC access.
+          - The firewall remains narrow: selected PC IP, TCP 10902, LocalSubnet only, Private profile only.
+          - RC.13 SFA-native QR import and Android baby steps remain included.
+          - Gameplay relay architecture, latency-sensitive polling, encrypted transport, and duplicate-path protections are unchanged.
+
+          ### Test
+          1. Open the manager.
+          2. If Firewall says **Network is Public**, click **Allow Firewall**.
+          3. Only if this is your trusted home/private LAN, choose **Yes** and approve Windows UAC.
+          4. Confirm Firewall becomes **Ready**.
+          5. Start SFA on Android, then **Start Relay** on PC, then open BPSR.
+          6. Confirm BPSR connects, latency feels normal, the DPS meter reads `StarSEA`, and DPS is not doubled.
+
+          This remains a prerelease because the previous real-device test exposed this bug. Stable v1.0.0 stays gated until the corrected build passes the live Android + BPSR test.
+          EOF
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$VALIDATED_SHA" \
+            --title "BPSR Android DPSMeter Relay v1.0.0-rc.14" \
+            --notes-file release-notes.md \
+            --prerelease \
+            release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip \
+            release-artifact/BPSR-Android-DPSMeter-Relay-v1.0.0-rc.14.zip.sha256
+      - name: Verify published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json isPrerelease,tagName,targetCommitish --jq 'select(.isPrerelease == true and .tagName == "v1.0.0-rc.14" and .targetCommitish == "c4e774a907fd26689a2362629400e26149520cc9")' >/dev/null
