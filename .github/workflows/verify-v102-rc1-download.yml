@@ -1,0 +1,30 @@
+name: Verify v1.0.2-rc.1 Public Download
+
+on:
+  push:
+    branches:
+      - fix/firewall-verification-v1.0.2
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download prerelease assets anonymously and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/download/v1.0.2-rc.1'
+          curl --fail --location --retry 3 --output BPSR-Android-DPSMeter-Relay.zip "$base/BPSR-Android-DPSMeter-Relay.zip"
+          curl --fail --location --retry 3 --output BPSR-Android-DPSMeter-Relay.zip.sha256 "$base/BPSR-Android-DPSMeter-Relay.zip.sha256"
+          test -s BPSR-Android-DPSMeter-Relay.zip
+          test -s BPSR-Android-DPSMeter-Relay.zip.sha256
+          cat BPSR-Android-DPSMeter-Relay.zip.sha256
+          sha256sum -c BPSR-Android-DPSMeter-Relay.zip.sha256
+          actual="$(sha256sum BPSR-Android-DPSMeter-Relay.zip | awk '{print $1}')"
+          test "$actual" = 'f72cce54878e149737fa437c6abd6b849133cb35bce772eb906193345047ec8a'
+          unzip -t BPSR-Android-DPSMeter-Relay.zip
+          echo "PUBLIC RC DOWNLOAD PASS: $actual"
