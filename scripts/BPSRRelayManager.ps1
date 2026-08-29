@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.7'
+$ManagerVersion = '1.0.0-rc.8'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -534,9 +534,14 @@ function Load-TrackedRelayIdentity {
     $script:trackedStarStartUtc = ''
 
     $state = Get-RecordedPids
-    if ($state -and $state.starPid) {
-        $script:trackedStarPid = [int]$state.starPid
-        if ($state.starStartUtc) { $script:trackedStarStartUtc = [string]$state.starStartUtc }
+    if ($state -and $state.starPid -and $state.starStartUtc) {
+        $candidatePid = [int]$state.starPid
+        $candidateStart = [string]$state.starStartUtc
+        # Full path/start-time verification happens once when this manager attaches.
+        if (Test-ExpectedProcess -ProcessId $candidatePid -ExpectedPath $StarExe -ExpectedStartUtc $candidateStart) {
+            $script:trackedStarPid = $candidatePid
+            $script:trackedStarStartUtc = $candidateStart
+        }
     }
 }
 
@@ -858,8 +863,16 @@ function Restore-PreviousRuntime {
 
 function Get-RelayTrackedRunning {
     Load-TrackedRelayIdentity
-    if ($script:trackedStarPid -le 0) { return $false }
-    return Test-ExpectedProcess -ProcessId $script:trackedStarPid -ExpectedPath $StarExe -ExpectedStartUtc $script:trackedStarStartUtc
+    if ($script:trackedStarPid -le 0 -or [string]::IsNullOrWhiteSpace($script:trackedStarStartUtc)) { return $false }
+    try {
+        # Gameplay hot check: PID + immutable process start time only. The executable path
+        # was fully validated when the identity was loaded or when this manager launched it.
+        $process = Get-Process -Id $script:trackedStarPid -ErrorAction Stop
+        $expectedStart = [DateTime]::Parse($script:trackedStarStartUtc).ToUniversalTime()
+        $actualStart = $process.StartTime.ToUniversalTime()
+        return [Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -le 2
+    }
+    catch { return $false }
 }
 
 function Start-ProfileShare {
@@ -1139,7 +1152,7 @@ function Update-Status {
     if (-not $script:lblRelayState) { return }
 
     # Gameplay hot path: once StarSEA is running, status polling must remain tiny.
-    # Do not hash the runtime, enumerate adapters, or reread PID JSON every timer tick while playing.
+    # Do not hash the runtime, enumerate adapters, reread PID JSON, or resolve the executable path every timer tick.
     if (Get-RelayTrackedRunning) {
         $script:lblRelayState.Text = 'Relay: RUNNING - StarSEA only'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkGreen

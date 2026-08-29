@@ -232,7 +232,7 @@ The generated path intentionally uses:
 
 Encryption adds a very small amount of CPU work, but it lets the project remove the old second PC proxy/local bridge and ensures the LAN tunnel does not expose a second clear BPSR payload to packet parsers.
 
-The manager UI can remain open while playing. Its live status path uses an in-memory tracked StarSEA identity and only checks process state; it does not repeatedly hash binaries, enumerate adapters, or reread the PID JSON while the relay is running. Heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
+The manager UI can remain open while playing. When it first attaches to a tracked StarSEA process it verifies the executable path and start time once. While the relay is running, the recurring status check uses only the cached PID + immutable process start time; it does not repeatedly hash binaries, enumerate adapters, reread PID JSON, or resolve the executable path. Heavier integrity/network checks are done during setup, preflight, diagnostics, or while the relay is stopped.
 
 ## Routed ports
 
