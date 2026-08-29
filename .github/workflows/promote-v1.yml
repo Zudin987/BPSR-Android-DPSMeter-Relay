@@ -50,27 +50,10 @@ jobs:
           $readme = $readme.Replace('Current test build: **v1.0.0-rc.15**', 'Current stable release: **v1.0.0**')
           $readme = $readme.Replace('v1.0.0-rc.15', 'v1.0.0')
           $readme = $readme.Replace('RC.15', 'v1.0.0')
-          $readme = [regex]::Replace(
-            $readme,
-            '(?m)^> v1\.0\.0 is a compatibility test build\..*$',
-            '> v1.0.0 keeps the field-tested **Clean v4-compatible** two-stage SOCKS5 path validated on real Android + BPSR + DPS-meter use.'
-          )
-          $stableStatus = @"
-## Release status
-
-**v1.0.0 is the current stable release.**
-
-The Clean-v4-compatible Android → BPSRMobileFront → localhost StarSEA path passed the real Android + Windows + SFA + BPSR + compatible DPS-meter field test, including normal gameplay connectivity, acceptable latency, DPS capture, and no doubled DPS.
-
-"@
-          $readme = [regex]::Replace(
-            $readme,
-            '(?s)## Release status\r?\n.*?(?=## Disclaimer)',
-            $stableStatus
-          )
-          if ($readme -match '1\.0\.0-rc\.' -or $readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
-            throw 'README still contains prerelease gate wording after promotion.'
-          }
+          $readme = [regex]::Replace($readme, '(?m)^> v1\.0\.0 is a compatibility test build\..*$', '> v1.0.0 keeps the field-tested **Clean v4-compatible** two-stage SOCKS5 path validated on real Android + BPSR + DPS-meter use.')
+          $stableStatus = "## Release status`r`n`r`n**v1.0.0 is the current stable release.**`r`n`r`nThe Clean-v4-compatible Android -> BPSRMobileFront -> localhost StarSEA path passed the real Android + Windows + SFA + BPSR + compatible DPS-meter field test, including normal gameplay connectivity, acceptable latency, DPS capture, and no doubled DPS.`r`n`r`n"
+          $readme = [regex]::Replace($readme, '(?s)## Release status\r?\n.*?(?=## Disclaimer)', $stableStatus)
+          if ($readme -match '1\.0\.0-rc\.' -or $readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') { throw 'README still contains prerelease gate wording after promotion.' }
           Write-All $readmePath $readme
 
           $validatePath = '.github\workflows\validate.yml'
