@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.2'
+$ManagerVersion = '1.0.0-rc.3'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -219,19 +219,15 @@ function Save-RollbackRuntime {
     if (-not (Test-Path -LiteralPath $SingBoxExe -PathType Leaf)) { return }
     $version = Get-InstalledVersion
     if ([string]::IsNullOrWhiteSpace($version)) { return }
+    if (-not (Test-RuntimeIntegrity)) {
+        Add-Log ('Not saving ' + $version + ' as rollback because its stored integrity check failed.')
+        return
+    }
 
     Copy-Item -LiteralPath $SingBoxExe -Destination (Join-Path $RollbackDir 'sing-box.exe') -Force
+    Copy-Item -LiteralPath $RuntimeHashFile -Destination (Join-Path $RollbackDir 'sha256.txt') -Force
     Write-Utf8NoBom -Path (Join-Path $RollbackDir 'version.txt') -Text $version
-
-    $hash = ''
-    if (Test-Path -LiteralPath $RuntimeHashFile) {
-        $hash = (Get-Content -LiteralPath $RuntimeHashFile -Raw).Trim()
-    }
-    if ([string]::IsNullOrWhiteSpace($hash)) {
-        $hash = (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    Write-Utf8NoBom -Path (Join-Path $RollbackDir 'sha256.txt') -Text $hash
-    Add-Log ('Saved previous sing-box runtime ' + $version + ' for rollback.')
+    Add-Log ('Saved previous verified sing-box runtime ' + $version + ' for rollback.')
 }
 
 function Install-SingBoxVersion {
@@ -614,12 +610,18 @@ function Stop-Relay {
 function Assert-NoForeignRelayProcesses {
     $state = Get-RecordedPids
     $trackedStar = 0
-    if ($state -and $state.starPid) { $trackedStar = [int]$state.starPid }
+    $trackedStart = ''
+    if ($state -and $state.starPid) {
+        $trackedStar = [int]$state.starPid
+        if ($state.starStartUtc) { $trackedStart = [string]$state.starStartUtc }
+    }
 
     $foreign = @()
     foreach ($name in @('StarSEA', 'BPSRMobileFront', 'BPSRRelayIngress')) {
         foreach ($process in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-            if ($name -eq 'StarSEA' -and $process.Id -eq $trackedStar -and (Test-ExpectedProcess -ProcessId $process.Id -ExpectedPath $StarExe)) {
+            if ($name -eq 'StarSEA' -and
+                $process.Id -eq $trackedStar -and
+                (Test-ExpectedProcess -ProcessId $process.Id -ExpectedPath $StarExe -ExpectedStartUtc $trackedStart)) {
                 continue
             }
             $foreign += ($name + ' (PID ' + $process.Id + ')')
@@ -667,12 +669,13 @@ function Test-FirewallReady {
     try {
         $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction Stop | Where-Object { $_.Enabled -eq 'True' })
         foreach ($rule in $rules) {
+            if ([string]$rule.Profile -notmatch 'Private|Domain') { continue }
             $port = $rule | Get-NetFirewallPortFilter
             $addr = $rule | Get-NetFirewallAddressFilter
             if ([string]$port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort) {
                 $locals = @($addr.LocalAddress)
                 $remotes = @($addr.RemoteAddress)
-                if (($locals -contains $PcIp -or $locals -contains 'Any') -and ($remotes -contains 'LocalSubnet' -or $remotes -contains 'Any')) {
+                if (($locals -contains $PcIp) -and ($remotes -contains 'LocalSubnet')) {
                     return $true
                 }
             }
@@ -750,30 +753,39 @@ function Restore-PreviousRuntime {
 
     $expected = (Get-Content -LiteralPath $rollbackHash -Raw).Trim().ToLowerInvariant()
     $actual = (Get-FileHash -LiteralPath $rollbackExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($expected -ne $actual) { throw 'Rollback runtime integrity check failed.' }
+    if ($expected -notmatch '^[a-f0-9]{64}$' -or $expected -ne $actual) { throw 'Rollback runtime integrity check failed.' }
 
     $tempDir = Join-Path $Runtime 'rollback-swap-temp'
     if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    $currentWasVerified = Test-RuntimeIntegrity
+    $swapSucceeded = $false
 
     try {
         if (Test-Path -LiteralPath $SingBoxExe) {
             Copy-Item -LiteralPath $SingBoxExe -Destination (Join-Path $tempDir 'sing-box.exe') -Force
-            Write-Utf8NoBom -Path (Join-Path $tempDir 'version.txt') -Text (Get-InstalledVersion)
-            $currentHash = (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash.ToLowerInvariant()
-            Write-Utf8NoBom -Path (Join-Path $tempDir 'sha256.txt') -Text $currentHash
+        }
+        if (Test-Path -LiteralPath $VersionFile) {
+            Copy-Item -LiteralPath $VersionFile -Destination (Join-Path $tempDir 'version.txt') -Force
+        }
+        if (Test-Path -LiteralPath $RuntimeHashFile) {
+            Copy-Item -LiteralPath $RuntimeHashFile -Destination (Join-Path $tempDir 'sha256.txt') -Force
         }
 
         Copy-Item -LiteralPath $rollbackExe -Destination $SingBoxExe -Force
-        Write-Utf8NoBom -Path $VersionFile -Text ((Get-Content -LiteralPath $rollbackVersion -Raw).Trim())
-        Write-Utf8NoBom -Path $RuntimeHashFile -Text $expected
+        Copy-Item -LiteralPath $rollbackVersion -Destination $VersionFile -Force
+        Copy-Item -LiteralPath $rollbackHash -Destination $RuntimeHashFile -Force
         Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
 
+        if (-not (Test-RuntimeIntegrity)) { throw 'Restored runtime failed its local integrity check.' }
         $pcIp = Get-ProfilePcIp
         if ([string]::IsNullOrWhiteSpace($pcIp)) { throw 'Profile IP is unavailable; run Setup / Repair instead.' }
         Validate-GeneratedConfigs -PcIp $pcIp
+        $swapSucceeded = $true
 
-        if (Test-Path -LiteralPath (Join-Path $tempDir 'sing-box.exe')) {
+        if ($currentWasVerified -and (Test-Path -LiteralPath (Join-Path $tempDir 'sing-box.exe')) -and
+            (Test-Path -LiteralPath (Join-Path $tempDir 'version.txt')) -and
+            (Test-Path -LiteralPath (Join-Path $tempDir 'sha256.txt'))) {
             Copy-Item -LiteralPath (Join-Path $tempDir 'sing-box.exe') -Destination $rollbackExe -Force
             Copy-Item -LiteralPath (Join-Path $tempDir 'version.txt') -Destination $rollbackVersion -Force
             Copy-Item -LiteralPath (Join-Path $tempDir 'sha256.txt') -Destination $rollbackHash -Force
@@ -781,8 +793,27 @@ function Restore-PreviousRuntime {
         Add-Log ('Runtime rollback successful. Active sing-box: ' + (Get-InstalledVersion) + '.')
     }
     catch {
-        Add-Log ('Rollback failed: ' + $_.Exception.Message)
-        throw
+        $failure = $_.Exception
+        if (-not $swapSucceeded -and (Test-Path -LiteralPath (Join-Path $tempDir 'sing-box.exe'))) {
+            try {
+                Copy-Item -LiteralPath (Join-Path $tempDir 'sing-box.exe') -Destination $SingBoxExe -Force
+                if (Test-Path -LiteralPath (Join-Path $tempDir 'version.txt')) {
+                    Copy-Item -LiteralPath (Join-Path $tempDir 'version.txt') -Destination $VersionFile -Force
+                }
+                else { Remove-Item -LiteralPath $VersionFile -Force -ErrorAction SilentlyContinue }
+                if (Test-Path -LiteralPath (Join-Path $tempDir 'sha256.txt')) {
+                    Copy-Item -LiteralPath (Join-Path $tempDir 'sha256.txt') -Destination $RuntimeHashFile -Force
+                }
+                else { Remove-Item -LiteralPath $RuntimeHashFile -Force -ErrorAction SilentlyContinue }
+                Copy-Item -LiteralPath $SingBoxExe -Destination $StarExe -Force
+                Add-Log 'Rollback validation failed; restored the exact pre-rollback runtime files.'
+            }
+            catch {
+                Add-Log ('CRITICAL: rollback failed and restoring the pre-rollback runtime also failed: ' + $_.Exception.Message)
+            }
+        }
+        Add-Log ('Rollback failed: ' + $failure.Message)
+        throw $failure
     }
     finally {
         if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -806,6 +837,7 @@ function Start-ProfileShare {
     if (Get-RelayTrackedRunning) { throw 'Stop the relay before sharing the profile. The share page intentionally uses the same port and never runs during gameplay.' }
 
     Stop-ProfileShare
+    Assert-NoForeignRelayProcesses
     Assert-RelayPortFree
     $token = New-ShareToken
     $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Argument $ServerScript) +
@@ -877,13 +909,20 @@ function Get-PreflightChecks {
     else { Add-CheckLocal 'LAN IP' 'FAIL' 'Selected IP is not currently assigned to this PC.' }
 
     $version = Get-InstalledVersion
-    if ($version -eq $TestedSingBoxVersion -and (Test-RuntimeIntegrity)) { Add-CheckLocal 'Runtime' 'OK' ($version + ' verified') }
-    else { Add-CheckLocal 'Runtime' 'FAIL' ('Expected tested runtime ' + $TestedSingBoxVersion + '.') }
+    if (Test-RuntimeIntegrity) {
+        if ($version -eq $TestedSingBoxVersion) {
+            Add-CheckLocal 'Runtime' 'OK' ($version + ' tested / verified')
+        }
+        else {
+            Add-CheckLocal 'Runtime' 'OK' ($version + ' verified rollback; current project-tested version is ' + $TestedSingBoxVersion)
+        }
+    }
+    else { Add-CheckLocal 'Runtime' 'FAIL' 'Runtime integrity failed or Setup / Repair has not completed.' }
 
     if ((Test-Path -LiteralPath $StarExe) -and (Test-Path -LiteralPath $SingBoxExe)) {
         try {
             $same = (Get-FileHash -LiteralPath $StarExe -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $SingBoxExe -Algorithm SHA256).Hash
-            if ($same) { Add-CheckLocal 'StarSEA binary' 'OK' 'Matches verified sing-box runtime.' }
+            if ($same) { Add-CheckLocal 'StarSEA binary' 'OK' 'Matches verified active sing-box runtime.' }
             else { Add-CheckLocal 'StarSEA binary' 'FAIL' 'Runtime copy hash mismatch.' }
         }
         catch { Add-CheckLocal 'StarSEA binary' 'FAIL' $_.Exception.Message }
@@ -914,7 +953,7 @@ function Get-PreflightChecks {
     }
 
     if (Test-FirewallReady -PcIp $PcIp) { Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule found.' }
-    else { Add-CheckLocal 'Firewall' 'WARN' 'Expected manager firewall rule was not found for this IP.' }
+    else { Add-CheckLocal 'Firewall' 'WARN' 'Expected narrow manager firewall rule was not found for this IP.' }
 
     $category = Get-NetworkCategoryForIp -Address $PcIp
     if ($category -eq 'Private' -or $category -eq 'DomainAuthenticated') { Add-CheckLocal 'Windows network profile' 'OK' $category }
@@ -1089,8 +1128,13 @@ function Update-Status {
     }
 
     $version = Get-InstalledVersion
-    if ($version -eq $TestedSingBoxVersion -and (Test-RuntimeIntegrity)) {
-        $script:lblRuntimeState.Text = 'Runtime: ' + $version + ' TESTED / VERIFIED'
+    if (Test-RuntimeIntegrity) {
+        if ($version -eq $TestedSingBoxVersion) {
+            $script:lblRuntimeState.Text = 'Runtime: ' + $version + ' TESTED / VERIFIED'
+        }
+        else {
+            $script:lblRuntimeState.Text = 'Runtime: ' + $version + ' VERIFIED ROLLBACK (tested: ' + $TestedSingBoxVersion + ')'
+        }
         $script:lblRuntimeState.ForeColor = [System.Drawing.Color]::DarkGreen
     }
     else {
