@@ -1,5 +1,7 @@
 .runtime/
 output/
+dist/
+.build/
 *.exe
 *.zip
 *.log
