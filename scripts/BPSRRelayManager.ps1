@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.3'
+$ManagerVersion = '1.0.0-rc.4'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -1099,11 +1099,15 @@ function Update-Status {
 
     if (-not $script:lblRelayState) { return }
 
+    # Gameplay hot path: once StarSEA is running, status polling must remain tiny.
+    # Do not hash the runtime or enumerate adapters every timer tick while playing.
     if (Get-RelayTrackedRunning) {
         $script:lblRelayState.Text = 'Relay: RUNNING - StarSEA only'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkGreen
+        return
     }
-    elseif (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
+
+    if (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
         $script:lblRelayState.Text = 'Relay: FOREIGN / LEGACY PROCESS DETECTED'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
     }
@@ -1363,7 +1367,7 @@ $note.Size = New-Object System.Drawing.Size(840, 22)
 $form.Controls.Add($note)
 
 $timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 2000
+$timer.Interval = 3000
 $timer.Add_Tick({ Update-Status })
 $timer.Start()
 
@@ -1373,3 +1377,4 @@ Add-Log ('Tested runtime is pinned to sing-box ' + $TestedSingBoxVersion + '; Se
 
 [void]$form.ShowDialog()
 $timer.Stop()
+Stop-ProfileShare
