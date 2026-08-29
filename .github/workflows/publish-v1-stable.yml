@@ -106,8 +106,9 @@ jobs:
           $sha = Get-ChildItem '.\dist' -Filter '*.sha256' -File | Select-Object -First 1
           if (-not $zip -or -not $sha) { throw 'Release assets are missing.' }
 
-          gh release view $tag --repo '${{ github.repository }}' *> $null
-          if ($LASTEXITCODE -eq 0) { throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.') }
+          cmd.exe /d /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          if ($releaseExists) { throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.') }
 
           gh release create $tag $zip.FullName $sha.FullName `
             --repo '${{ github.repository }}' `
