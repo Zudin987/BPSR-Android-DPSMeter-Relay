@@ -5,13 +5,14 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0'
+$ManagerVersion = '1.0.1'
 $TestedSingBoxVersion = 'v1.13.19'
 $FrontPort = 10808
 $InternalPortStart = 18080
 $InternalPortEnd = 18180
 $FirewallRuleName = 'BPSR Android DPSMeter Relay'
 $ShareLifetimeSeconds = 300
+$MaxLogBytes = 2097152
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Runtime = Join-Path $Root '.runtime'
@@ -71,9 +72,23 @@ function Read-JsonFile {
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
+function Rotate-LogIfNeeded {
+    Ensure-Directories
+    try {
+        if (-not (Test-Path -LiteralPath $LogFile -PathType Leaf)) { return }
+        $info = Get-Item -LiteralPath $LogFile -ErrorAction Stop
+        if ($info.Length -lt $MaxLogBytes) { return }
+        $backup = $LogFile + '.1'
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $LogFile -Destination $backup -Force
+    }
+    catch {}
+}
+
 function Add-Log {
     param([string]$Message)
     Ensure-Directories
+    Rotate-LogIfNeeded
     $line = '[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] ' + $Message
     try { [System.IO.File]::AppendAllText($LogFile, $line + [Environment]::NewLine, $Utf8NoBom) } catch {}
     if ($script:txtLog) {
@@ -358,10 +373,12 @@ function Get-OrCreateCredentials {
 
 function Get-FreeInternalPort {
     foreach ($candidatePort in $InternalPortStart..$InternalPortEnd) {
-        $used = @(Get-NetTCPConnection -LocalPort $candidatePort -State Listen -ErrorAction SilentlyContinue)
-        if ($used.Count -eq 0) { return [int]$candidatePort }
+        if ((Get-ListeningConnections -Port $candidatePort).Count -eq 0 -and
+            (Get-ListeningUdpEndpoints -Port $candidatePort).Count -eq 0) {
+            return [int]$candidatePort
+        }
     }
-    throw ('Could not find a free localhost bridge port between ' + $InternalPortStart + ' and ' + $InternalPortEnd + '.')
+    throw ('Could not find a free TCP+UDP localhost bridge port between ' + $InternalPortStart + ' and ' + $InternalPortEnd + '.')
 }
 
 function Write-RelayConfigs {
@@ -484,9 +501,9 @@ function Write-RelayConfigs {
     $importText = @"
 BPSR Android DPSMeter Relay
 
-IMPORTANT FOR v1.0.0:
-Delete/disable the RC.14 SFA profile and import this newly generated profile.
-v1.0.0 restores the original Clean v4 routing shape for compatibility.
+IMPORTANT FOR v1.0.1:
+If upgrading from an older test build, remove its old BPSR Relay profile and import this newly generated profile.
+v1.0.1 keeps the field-tested Clean v4 routing shape unchanged.
 
 PC LAN IPv4 in this profile: $PcIp
 Phone relay port: $FrontPort
@@ -509,7 +526,7 @@ Transport:
 - Do not port-forward relay port $FrontPort.
 "@
     Write-Utf8NoBom -Path (Join-Path $OutputDir 'IMPORT-THIS-PROFILE.txt') -Text $importText
-    Add-Log ('Generated v4-compatible Android SFA profile for PC ' + $PcIp + '. Re-import is required when upgrading from RC.14.')
+    Add-Log ('Generated v4-compatible Android SFA profile for PC ' + $PcIp + '. Re-import is required only when the profile/IP changes or when upgrading from an incompatible test profile.')
 }
 
 function Get-ProfilePcIp {
@@ -631,6 +648,47 @@ function Validate-GeneratedConfigs {
     Test-SingBoxConfig -ConfigPath $StarConfig
     Test-SingBoxConfig -ConfigPath $AndroidConfig
     Add-Log 'Config validation passed: original Clean v4-compatible two-stage SOCKS5 topology, no sniffing, one StarSEA game-server path.'
+}
+
+function Ensure-InternalBridgePortAvailable {
+    param([string]$PcIp)
+
+    $front = Read-JsonFile -Path $FrontConfig
+    $star = Read-JsonFile -Path $StarConfig
+    if (-not $front -or -not $star) { throw 'PC relay configs are missing. Click Prepare Relay first.' }
+
+    $frontOut = @($front.outbounds | Select-Object -First 1)[0]
+    $starIn = @($star.inbounds | Select-Object -First 1)[0]
+    if (-not $frontOut -or -not $starIn) { throw 'PC relay configs are incomplete. Click Prepare Relay first.' }
+
+    $currentPort = [int]$frontOut.server_port
+    if ($currentPort -eq [int]$starIn.listen_port -and
+        $currentPort -ge $InternalPortStart -and $currentPort -le $InternalPortEnd -and
+        (Get-ListeningConnections -Port $currentPort).Count -eq 0 -and
+        (Get-ListeningUdpEndpoints -Port $currentPort).Count -eq 0) {
+        return $currentPort
+    }
+
+    $newPort = Get-FreeInternalPort
+    $frontOut.server_port = $newPort
+    $starIn.listen_port = $newPort
+    Write-JsonFile -Path $FrontConfig -Value $front
+    Write-JsonFile -Path $StarConfig -Value $star
+
+    try {
+        $meta = Read-JsonFile -Path $ProfileMeta
+        if ($meta) {
+            $meta.internalPort = $newPort
+            Write-JsonFile -Path $ProfileMeta -Value $meta
+        }
+    }
+    catch {}
+
+    Assert-Topology -PcIp $PcIp
+    Test-SingBoxConfig -ConfigPath $FrontConfig
+    Test-SingBoxConfig -ConfigPath $StarConfig
+    Add-Log ('Localhost bridge port was busy/stale; refreshed it to ' + $newPort + ' without changing the Android profile.')
+    return $newPort
 }
 
 function Get-RecordedPids {
@@ -806,9 +864,12 @@ function Get-ForeignRelayProcesses {
                 if ($name -eq 'StarSEA' -and $process.Id -eq $trackedStar) { continue }
                 if ($name -eq 'BPSRMobileFront' -and $process.Id -eq $trackedFront) { continue }
             }
+            $startUtc = ''
+            try { $startUtc = $process.StartTime.ToUniversalTime().ToString('o') } catch {}
             $foreign += [PSCustomObject]@{
                 Name = $name
                 Id = [int]$process.Id
+                StartUtc = $startUtc
             }
         }
     }
@@ -829,11 +890,26 @@ function Get-ListeningConnections {
     catch { return @() }
 }
 
+function Get-ListeningUdpEndpoints {
+    param([int]$Port)
+    try { return @(Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue) }
+    catch { return @() }
+}
+
 function Assert-RelayPortFree {
-    $listeners = @(Get-ListeningConnections -Port $FrontPort)
-    if ($listeners.Count -gt 0) {
-        $owners = @($listeners | ForEach-Object { [string]$_.OwningProcess } | Select-Object -Unique)
-        throw ('TCP ' + $FrontPort + ' is already listening (PID ' + ($owners -join ', ') + '). Stop the conflicting program first.')
+    $tcp = @(Get-ListeningConnections -Port $FrontPort)
+    $udp = @(Get-ListeningUdpEndpoints -Port $FrontPort)
+    if ($tcp.Count -gt 0 -or $udp.Count -gt 0) {
+        $parts = @()
+        if ($tcp.Count -gt 0) {
+            $owners = @($tcp | ForEach-Object { [string]$_.OwningProcess } | Select-Object -Unique)
+            $parts += ('TCP listener PID ' + ($owners -join ', '))
+        }
+        if ($udp.Count -gt 0) {
+            $owners = @($udp | ForEach-Object { [string]$_.OwningProcess } | Select-Object -Unique)
+            $parts += ('UDP endpoint PID ' + ($owners -join ', '))
+        }
+        throw ('Relay port ' + $FrontPort + ' is already in use (' + ($parts -join '; ') + '). Stop the conflicting program first.')
     }
 }
 
@@ -991,8 +1067,8 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
 
-    Add-Log 'Setup / Repair complete. v1.0.0 now matches the original Clean v4 two-stage SOCKS5 route.'
-    Add-Log 'IMPORTANT: delete/disable the RC.14 SFA profile and import the newly generated v1.0.0 profile.'
+    Add-Log 'Setup / Repair complete. v1.0.1 keeps the original Clean v4 two-stage SOCKS5 route.'
+    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.1 profile.'
     Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
@@ -1115,6 +1191,9 @@ function Start-ProfileShare {
     if ((Get-ProfilePcIp) -ne $pcIp) { throw 'The Android profile is stale for this IP. Run Setup / Repair first.' }
     if (-not (Test-Path -LiteralPath $ServerScript)) { throw 'ServeProfile.ps1 is missing.' }
     if (Get-RelayTrackedRunning) { throw 'Stop the relay before sharing the profile. The share page intentionally uses the same port and never runs during gameplay.' }
+    if (-not (Test-FirewallReady -PcIp $pcIp)) {
+        throw 'Phone setup needs the trusted Private-LAN firewall rule first. Click Allow Firewall, then try again.'
+    }
 
     Stop-ProfileShare
     Assert-NoForeignRelayProcesses
@@ -1136,8 +1215,14 @@ function Start-ProfileShare {
     }
 
     $script:shareUrl = 'http://' + $pcIp + ':' + $FrontPort + '/' + $token + '/'
-    [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
-    Add-Log ('Temporary SFA setup started for up to ' + $ShareLifetimeSeconds + ' seconds. SFA import link copied.')
+    try {
+        [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
+        Add-Log 'SFA import link copied to clipboard.'
+    }
+    catch {
+        Add-Log ('WARNING: phone setup started, but Windows clipboard was busy: ' + $_.Exception.Message)
+    }
+    Add-Log ('Temporary SFA setup started for up to ' + $ShareLifetimeSeconds + ' seconds.')
     Add-Log 'The share server stops after SFA downloads the profile and is never part of gameplay traffic.'
     Update-Status
 }
@@ -1236,10 +1321,10 @@ function Get-PreflightChecks {
 
     $profileIp = Get-ProfilePcIp
     if ($profileIp -eq $PcIp) {
-        Add-CheckLocal 'Android profile' 'OK' ('v1.0.0 v4-compatible profile matches ' + $PcIp)
+        Add-CheckLocal 'Android profile' 'OK' ('v1.0.1 v4-compatible profile matches ' + $PcIp)
     }
     elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
-        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.0 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.1 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
     }
     else {
         Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
@@ -1262,12 +1347,19 @@ function Get-PreflightChecks {
     }
 
     if ($RequirePortFree) {
-        $listeners = @(Get-ListeningConnections -Port $FrontPort)
-        if ($listeners.Count -eq 0) {
+        $tcpListeners = @(Get-ListeningConnections -Port $FrontPort)
+        $udpEndpoints = @(Get-ListeningUdpEndpoints -Port $FrontPort)
+        if ($tcpListeners.Count -eq 0) {
             Add-CheckLocal ('TCP ' + $FrontPort) 'OK' 'Free for BPSRMobileFront.'
         }
         else {
             Add-CheckLocal ('TCP ' + $FrontPort) 'FAIL' 'Already in use.'
+        }
+        if ($udpEndpoints.Count -eq 0) {
+            Add-CheckLocal ('UDP ' + $FrontPort) 'OK' 'Free for BPSRMobileFront.'
+        }
+        else {
+            Add-CheckLocal ('UDP ' + $FrontPort) 'FAIL' 'Already in use.'
         }
     }
 
@@ -1315,12 +1407,13 @@ function Start-Relay {
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'v1.0.0 two-stage relay is already running.'
+        Add-Log 'v1.0.1 two-stage relay is already running.'
         Update-Status
         return
     }
 
     Stop-Relay
+    [void](Ensure-InternalBridgePortAvailable -PcIp $pcIp)
     $checks = Get-PreflightChecks -PcIp $pcIp -RequirePortFree
     $fails = @($checks | Where-Object { $_.State -eq 'FAIL' })
     if ($fails.Count -gt 0) {
@@ -1463,7 +1556,7 @@ Phone relay TCP listener: $listenerText
 Localhost StarSEA bridge port: $internalPortText
 Topology: $topology
 Ingress transport: authenticated SOCKS5 on trusted Private LAN
-Phone-to-PC encryption: DISABLED in v1.0.0 compatibility mode
+Phone-to-PC encryption: DISABLED in v1.0.1 compatibility mode
 Android protocol sniffing: DISABLED
 Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
 Multiplexing: DISABLED

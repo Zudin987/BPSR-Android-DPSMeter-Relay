@@ -167,10 +167,20 @@ function Close-OldRelayPrompt {
 
     foreach ($item in $items) {
         try {
+            if ([string]::IsNullOrWhiteSpace([string]$item.StartUtc)) {
+                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its start-time identity could not be recorded. Refresh and try again.')
+                continue
+            }
             $current = Get-Process -Id ([int]$item.Id) -ErrorAction Stop
             if ([string]$current.ProcessName -ne [string]$item.Name) { continue }
+            $expectedStart = [DateTime]::Parse([string]$item.StartUtc).ToUniversalTime()
+            $actualStart = $current.StartTime.ToUniversalTime()
+            if ([Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 2) {
+                Add-Log ('Skipped PID ' + $item.Id + ' because the process identity changed before cleanup.')
+                continue
+            }
             Stop-Process -Id ([int]$item.Id) -Force -ErrorAction Stop
-            Add-Log ('Closed old relay ' + $item.Name + ' (PID ' + $item.Id + ') after user confirmation.')
+            Add-Log ('Closed old relay ' + $item.Name + ' (PID ' + $item.Id + ') after PID/name/start-time verification and user confirmation.')
         }
         catch {
             Add-Log ('Could not close old relay PID ' + $item.Id + ': ' + $_.Exception.Message)
@@ -183,7 +193,7 @@ function Close-OldRelayPrompt {
     if ($remaining.Count -gt 0) {
         $left = (@($remaining | ForEach-Object { $_.Name + '.exe (PID ' + $_.Id + ')' }) -join ', ')
         [System.Windows.Forms.MessageBox]::Show(
-            "Windows could not close:`r`n`r`n$left`r`n`r`nRestart your PC, then try again.",
+            "Windows could not safely close:`r`n`r`n$left`r`n`r`nTry Prepare Relay again, or restart your PC.",
             'Could not close old relay',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -301,7 +311,7 @@ function Show-Preflight {
     }
 
     $names = ($fails.Name -join ' ')
-    if ($names -match 'Duplicate relay|TCP') {
+    if ($names -match 'Duplicate relay|TCP|UDP') {
         $message = "An old relay or another app is still using the relay.`r`n`r`nClose it or restart your PC."
     }
     elseif ($names -match 'LAN IP') {
@@ -333,10 +343,10 @@ function Update-UiButtonStates {
 
     if ($script:btnSetup)       { $script:btnSetup.Enabled = -not $Running }
     if ($script:btnFirewall)    { $script:btnFirewall.Enabled = -not $Running }
-    if ($script:btnShare)       { $script:btnShare.Enabled = (-not $Running) -and $ProfileReady -and (-not $ForeignRelay) }
+    if ($script:btnShare)       { $script:btnShare.Enabled = (-not $Running) -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnQr)          { $script:btnQr.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
     if ($script:btnUrl)         { $script:btnUrl.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
-    if ($script:btnPreflight)   { $script:btnPreflight.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }
+    if ($script:btnPreflight)   { $script:btnPreflight.Enabled = -not $Running }
     if ($script:btnStart)       { $script:btnStart.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnStop)        { $script:btnStop.Enabled = $Running }
     if ($script:btnStopDetails) { $script:btnStopDetails.Enabled = $Running }
@@ -549,13 +559,17 @@ foreach ($candidate in $candidates) {
         $seen[$candidate.IP] = $true
     }
 }
-if ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
+$existingProfileIp = Get-ProfilePcIp
+if (-not [string]::IsNullOrWhiteSpace($existingProfileIp) -and $script:cmbIp.Items.Contains($existingProfileIp) -and (Test-LocalIpAssigned $existingProfileIp)) {
+    $script:cmbIp.SelectedItem = $existingProfileIp
+}
+elseif ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
 $script:cmbIp.Add_SelectedIndexChanged({ Update-Status })
 $script:cmbIp.Add_Leave({ Update-Status })
 
 $step1 = New-UiCard -X 0 -Y 80 -Width 548 -Height 70
 [void](Add-CardTitle -Parent $step1 -Text '1. Prepare Relay' -Y 10)
-[void](Add-CardHelp -Parent $step1 -Text 'Create v1.0.0 compatibility profile. Do this first.' -Y 36 -Width 338 -Height 24)
+[void](Add-CardHelp -Parent $step1 -Text 'Create/repair the field-tested compatibility profile. Do this first.' -Y 36 -Width 338 -Height 24)
 $script:btnSetup = New-UiButton -Text 'Prepare Relay' -X 382 -Y 32 -Width 148 -Height 30 -Primary
 $script:btnSetup.Add_Click({ Invoke-PrepareRelay })
 $step1.Controls.Add($script:btnSetup)
@@ -572,11 +586,24 @@ $setupPanel.Controls.Add($step2)
 # Compatibility marker for legacy static check only: -Text 'Send to Phone'
 $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
 [void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
-[void](Add-CardHelp -Parent $step3 -Text 'Remove old RC.14 profile, then scan the new v1.0.0 QR.' -Y 34 -Width 500 -Height 23)
+[void](Add-CardHelp -Parent $step3 -Text 'First setup or profile refresh: scan the current QR in SFA.' -Y 34 -Width 500 -Height 23)
 $script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
 $script:btnShare.Add_Click({
-    try { Start-ProfileShare; Show-ShareQr }
-    catch { Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception }
+    try { Start-ProfileShare }
+    catch {
+        Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception
+        return
+    }
+    try { Show-ShareQr }
+    catch {
+        Add-Log ('WARNING: phone setup is running, but the QR could not open: ' + $_.Exception.Message)
+        [System.Windows.Forms.MessageBox]::Show(
+            "Phone setup is running, but the QR could not open.`r`n`r`nClick Copy SFA Link and send/open that link on your phone.",
+            'Phone setup started',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+    }
 })
 $step3.Controls.Add($script:btnShare)
 $script:btnQr = New-UiButton -Text 'Show SFA QR' -X 172 -Y 62 -Width 116 -Height 30
@@ -646,7 +673,7 @@ $statusPanel.Controls.Add($nextCard)
 $quickCard = New-UiCard -X 0 -Y 322 -Width 316 -Height 100
 [void](Add-CardTitle -Parent $quickCard -Text 'Daily use' -Y 10)
 $quickText = New-Object System.Windows.Forms.Label
-$quickText.Text = "After the first setup:`r`nOpen app  ->  Start Relay  ->  Play"
+$quickText.Text = "After the first setup:`r`nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR"
 $quickText.Location = New-Object System.Drawing.Point(16, 43)
 $quickText.Size = New-Object System.Drawing.Size(284, 44)
 $quickText.ForeColor = $Ui.Neutral
@@ -756,7 +783,7 @@ $helpTab.Controls.Add($helpTitle)
 $androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
 [void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
 $androidLeft = New-Object System.Windows.Forms.Label
-$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. Delete/disable old RC.14 profile.`r`n`r`n6. PC: Start Phone Setup."
+$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. If an old test profile exists, remove it.`r`n`r`n6. PC: Start Phone Setup."
 $androidLeft.Location = New-Object System.Drawing.Point(16, 43)
 $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
 $androidLeft.ForeColor = $Ui.Neutral
@@ -792,7 +819,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: re-import v1.0.0 QR.`r`n`r`nNo DPS: StarSEA only."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: run Phone Setup and re-import the current QR.`r`n`r`nNo DPS: StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
