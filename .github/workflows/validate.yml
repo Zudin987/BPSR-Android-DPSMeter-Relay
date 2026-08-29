@@ -19,7 +19,8 @@ jobs:
             'scripts\LaunchManager.ps1',
             'scripts\BPSRRelayManager.ps1',
             'scripts\ServeProfile.ps1',
-            'scripts\TestRelaySmoke.ps1'
+            'scripts\TestRelaySmoke.ps1',
+            'scripts\BuildRelease.ps1'
           )
 
           foreach ($relative in $paths) {
@@ -150,3 +151,25 @@ jobs:
               if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
             }
           }
+
+      - name: Build and verify clean release package
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $zips = @(Get-ChildItem -LiteralPath '.\dist' -Filter '*.zip' -File)
+          $hashes = @(Get-ChildItem -LiteralPath '.\dist' -Filter '*.sha256' -File)
+          if ($zips.Count -ne 1 -or $hashes.Count -ne 1) {
+            throw 'Expected exactly one release ZIP and one SHA256 file.'
+          }
+
+      - name: Upload validated release candidate package
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-release-candidate
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
