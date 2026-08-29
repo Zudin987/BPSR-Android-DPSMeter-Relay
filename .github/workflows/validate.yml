@@ -18,6 +18,7 @@ jobs:
           $paths = @(
             'scripts\LaunchManager.ps1',
             'scripts\BPSRRelayManager.ps1',
+            'scripts\ManagerUi.ps1',
             'scripts\ServeProfile.ps1',
             'scripts\TestRelaySmoke.ps1',
             'scripts\BuildRelease.ps1'
@@ -35,10 +36,11 @@ jobs:
             Write-Host ($relative + ' syntax OK.')
           }
 
-      - name: Check latency, UX and single-count invariants
+      - name: Check latency, simple UI and single-count invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
+          $ui = Get-Content 'scripts\ManagerUi.ps1' -Raw
           $readme = Get-Content 'README.md' -Raw
           $bat = Get-Content 'BPSR Relay Manager.bat' -Raw
           $launcher = Get-Content 'launcher\BPSRRelayManagerLauncher.cs' -Raw
@@ -70,11 +72,9 @@ jobs:
             '-ExpectedStartUtc $trackedStart',
             'Not saving ',
             'restored the exact pre-rollback runtime files',
-            'Gameplay hot path: once StarSEA is running, status polling must remain tiny.',
-            'reread PID JSON',
-            'resolve the executable path every timer tick',
             '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
-            "if (`$category -eq 'Private')"
+            "if (`$category -eq 'Private')",
+            "Join-Path `$PSScriptRoot 'ManagerUi.ps1'"
           )
 
           foreach ($needle in $required) {
@@ -84,9 +84,49 @@ jobs:
             }
           }
 
-          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option', 'BPSR Relay Manager.exe', 'EXE-first')) {
+          if ($text.Contains('New-Object System.Windows.Forms.Form')) {
+            Write-Error 'UI was re-embedded into the latency-sensitive relay engine.'
+            exit 1
+          }
+
+          $uiRequired = @(
+            "`$homeTab.Text = 'Home'",
+            "`$detailsTab.Text = 'Details'",
+            "`$helpTab.Text = 'Help'",
+            "-Text 'Prepare Relay'",
+            "-Text 'Send to Phone'",
+            "-Text 'Start Relay'",
+            "-Text '5. Start & Play'",
+            "`$nextHeading.Text = 'What to do next'",
+            "`$helpTitle.Text = 'Simple Help'",
+            "`$targetValue.Text = 'StarSEA'",
+            'BPSR_RELAY_UI_SELF_TEST',
+            'UI SELF-TEST PASS',
+            'Gameplay hot path: one tracked-process check only.'
+          )
+
+          foreach ($needle in $uiRequired) {
+            if (-not $ui.Contains($needle)) {
+              Write-Error ('Simple UI invariant is missing: ' + $needle)
+              exit 1
+            }
+          }
+
+          $hotStart = $ui.IndexOf('if (Get-RelayTrackedRunning) {', [System.StringComparison]::Ordinal)
+          $hotReturn = if ($hotStart -ge 0) { $ui.IndexOf('return', $hotStart, [System.StringComparison]::Ordinal) } else { -1 }
+          if ($hotStart -lt 0 -or $hotReturn -lt 0) {
+            throw 'Could not identify the running-status hot path in ManagerUi.ps1.'
+          }
+          $hotSegment = $ui.Substring($hotStart, ($hotReturn - $hotStart + 6))
+          foreach ($forbidden in @('Test-RuntimeIntegrity', 'Test-FirewallReady', 'Get-ProfilePcIp', 'Get-LanIPv4Candidates', 'Get-FileHash', 'Get-CimInstance')) {
+            if ($hotSegment.Contains($forbidden)) {
+              throw ('Gameplay UI hot path regressed to heavy work: ' + $forbidden)
+            }
+          }
+
+          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option', 'BPSR Relay Manager.exe', 'EXE-first', 'Home', 'Details', 'Help', 'Prepare Relay', 'Start Relay')) {
             if (-not $readme.Contains($needle)) {
-              Write-Error ('Universal DPS/SFA/UX documentation invariant is missing: ' + $needle)
+              Write-Error ('Documentation invariant is missing: ' + $needle)
               exit 1
             }
           }
@@ -134,7 +174,7 @@ jobs:
             }
           }
 
-          foreach ($needle in @('BPSR Relay Manager.exe', '/target:winexe', '--launcher-self-test', 'must contain exactly one executable', "EntryPoint = 'BPSR Relay Manager.exe'")) {
+          foreach ($needle in @('BPSR Relay Manager.exe', 'scripts\ManagerUi.ps1', '/target:winexe', '--launcher-self-test', 'must contain exactly one executable', "EntryPoint = 'BPSR Relay Manager.exe'")) {
             if (-not $builder.Contains($needle)) {
               Write-Error ('EXE-first package guard is missing: ' + $needle)
               exit 1
@@ -148,7 +188,19 @@ jobs:
             }
           }
 
-          Write-Host 'Static latency/single-count/universal-DPS/SFA/EXE-UX/safety/release-gate invariants present.'
+          Write-Host 'Static latency/single-count/universal-DPS/SFA/simple-UI/EXE/safety/release-gate invariants present.'
+
+      - name: Test simple manager UI layout
+        shell: powershell
+        run: |
+          $env:BPSR_RELAY_UI_SELF_TEST = '1'
+          try {
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally {
+            Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue
+          }
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
@@ -248,6 +300,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $launcherExe -PathType Leaf)) {
             throw 'Release ZIP does not expose BPSR Relay Manager.exe as the user entry point.'
           }
+          if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'scripts\ManagerUi.ps1') -PathType Leaf)) {
+            throw 'Release ZIP is missing the simple manager UI module.'
+          }
           if (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'BPSR Relay Manager.bat')) {
             throw 'Legacy BAT is still exposed as a release-package root entry point.'
           }
@@ -266,7 +321,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw ('Packaged native launcher self-test failed: ' + $LASTEXITCODE)
           }
-          Write-Host 'EXE-first package and native launcher probe passed.'
+          Write-Host 'EXE-first package, UI module, and native launcher probe passed.'
 
       - name: Upload validated release candidate package
         uses: actions/upload-artifact@v4
