@@ -819,7 +819,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: run Phone Setup and re-import the current QR.`r`n`r`nNo DPS: StarSEA only."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: run Phone Setup, scan QR.`r`n`r`nNo DPS: StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
