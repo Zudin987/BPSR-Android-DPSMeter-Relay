@@ -4,6 +4,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-FreeTcpPort {
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return [int]$listener.LocalEndpoint.Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
 if (-not (Test-Path -LiteralPath $SingBoxExe -PathType Leaf)) {
     throw 'sing-box executable was not found.'
 }
@@ -17,9 +28,12 @@ if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('bpsr-relay-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
-$httpPort = 11991
-$ssPort = 11992
-$socksPort = 11993
+$ports = New-Object System.Collections.Generic.HashSet[int]
+while ($ports.Count -lt 3) { [void]$ports.Add((Get-FreeTcpPort)) }
+$portList = @($ports)
+$httpPort = $portList[0]
+$ssPort = $portList[1]
+$socksPort = $portList[2]
 $token = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 $key = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes('0123456789abcdef'))
 $profile = Join-Path $temp 'android-bpsr-relay.json'
