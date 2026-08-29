@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -38,8 +37,7 @@ function Ensure-Directories {
 
 function Add-Log {
     param([string]$Message)
-    $stamp = Get-Date -Format 'HH:mm:ss'
-    $line = "[$stamp] $Message"
+    $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + $Message
     if ($script:txtLog) {
         $script:txtLog.AppendText($line + [Environment]::NewLine)
         $script:txtLog.SelectionStart = $script:txtLog.TextLength
@@ -49,13 +47,18 @@ function Add-Log {
 
 function Show-FriendlyError {
     param([string]$Title, [System.Exception]$Exception)
-    Add-Log ("ERROR: " + $Exception.Message)
+    Add-Log ('ERROR: ' + $Exception.Message)
     [System.Windows.Forms.MessageBox]::Show(
         $Exception.Message,
         $Title,
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
     ) | Out-Null
+}
+
+function Quote-Argument {
+    param([string]$Value)
+    return '"' + $Value + '"'
 }
 
 function Get-SingBoxArchitecture {
@@ -67,7 +70,7 @@ function Get-SingBoxArchitecture {
     switch -Regex ($arch) {
         '^AMD64$' { return 'amd64' }
         '^ARM64$' { return 'arm64' }
-        default { throw "Unsupported Windows architecture: $arch. Only x64 (amd64) and ARM64 are supported." }
+        default { throw ('Unsupported Windows architecture: ' + $arch + '. Only x64 (amd64) and ARM64 are supported.') }
     }
 }
 
@@ -95,10 +98,10 @@ function Get-LanIPv4Candidates {
         }
     }
     catch {
-        Add-Log 'Could not enumerate adapters automatically. You can type the PC LAN IPv4 manually.'
+        Add-Log 'Could not enumerate adapters automatically. Type the PC LAN IPv4 manually.'
     }
 
-    return @($items | Sort-Object Score -Descending | Select-Object -Unique IP, Interface, Score)
+    return @($items | Sort-Object Score -Descending)
 }
 
 function Test-IPv4Address {
@@ -109,8 +112,7 @@ function Test-IPv4Address {
 }
 
 function Get-SelectedIp {
-    $value = [string]$script:cmbIp.Text
-    $value = $value.Trim()
+    $value = ([string]$script:cmbIp.Text).Trim()
     if (-not (Test-IPv4Address $value)) {
         throw 'Choose or type a valid PC LAN IPv4 address, for example 192.168.1.20.'
     }
@@ -128,19 +130,17 @@ function Invoke-DownloadFile {
 function Ensure-LatestSingBox {
     Ensure-Directories
     $arch = Get-SingBoxArchitecture
-    Add-Log "Checking the latest official sing-box release for Windows/$arch..."
+    Add-Log ('Checking latest official sing-box for Windows/' + $arch + '...')
 
     $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest' -Headers @{ 'User-Agent' = 'BPSR-Android-DPSMeter-Relay' }
     if (-not $release -or -not $release.tag_name) {
         throw 'GitHub did not return a valid latest sing-box release.'
     }
 
-    $zipAsset = $release.assets |
-        Where-Object { $_.name -match ("^sing-box-.*-windows-" + [regex]::Escape($arch) + "\.zip$") } |
-        Select-Object -First 1
-
+    $pattern = '^sing-box-.*-windows-' + [regex]::Escape($arch) + '\.zip$'
+    $zipAsset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
     if (-not $zipAsset) {
-        throw "Could not find the official Windows/$arch sing-box ZIP in release $($release.tag_name)."
+        throw ('Could not find the official Windows/' + $arch + ' sing-box ZIP in release ' + $release.tag_name + '.')
     }
 
     $installedVersion = ''
@@ -149,7 +149,7 @@ function Ensure-LatestSingBox {
     }
 
     if ((Test-Path $SingBoxExe) -and $installedVersion -eq [string]$release.tag_name) {
-        Add-Log "sing-box $installedVersion is already installed."
+        Add-Log ('sing-box ' + $installedVersion + ' is already installed.')
         return
     }
 
@@ -159,7 +159,7 @@ function Ensure-LatestSingBox {
 
     try {
         $zipPath = Join-Path $downloadDir $zipAsset.name
-        Add-Log "Downloading $($zipAsset.name)..."
+        Add-Log ('Downloading ' + $zipAsset.name + '...')
         Invoke-DownloadFile -Url $zipAsset.browser_download_url -Destination $zipPath
 
         $checksumAsset = $release.assets |
@@ -171,6 +171,7 @@ function Ensure-LatestSingBox {
                 $checksumPath = Join-Path $downloadDir $checksumAsset.name
                 Invoke-DownloadFile -Url $checksumAsset.browser_download_url -Destination $checksumPath
                 $expectedHash = $null
+
                 foreach ($line in Get-Content $checksumPath) {
                     if ($line -match '(?i)^\s*([a-f0-9]{64})\s+\*?(.+?)\s*$') {
                         $listedName = [System.IO.Path]::GetFileName($Matches[2].Trim())
@@ -189,28 +190,26 @@ function Ensure-LatestSingBox {
                     Add-Log 'SHA256 verification passed.'
                 }
                 else {
-                    Add-Log 'Warning: checksum asset found, but no matching hash line was found for this ZIP.'
+                    Add-Log 'Warning: checksum file found, but it did not contain a matching hash for this ZIP.'
                 }
             }
             catch {
                 if ($_.Exception.Message -like 'SHA256 verification FAILED*') { throw }
-                Add-Log ("Warning: checksum verification was unavailable: " + $_.Exception.Message)
+                Add-Log ('Warning: checksum verification was unavailable: ' + $_.Exception.Message)
             }
         }
         else {
-            Add-Log 'Warning: this release did not expose a checksum asset; continuing with the official GitHub release download.'
+            Add-Log 'Warning: no checksum asset was published with this release; using the official GitHub release download.'
         }
 
         $extractDir = Join-Path $downloadDir 'extracted'
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
         $foundExe = Get-ChildItem -Path $extractDir -Filter 'sing-box.exe' -File -Recurse | Select-Object -First 1
-        if (-not $foundExe) {
-            throw 'The downloaded archive did not contain sing-box.exe.'
-        }
+        if (-not $foundExe) { throw 'The downloaded archive did not contain sing-box.exe.' }
 
         Copy-Item -Path $foundExe.FullName -Destination $SingBoxExe -Force
-        [string]$release.tag_name | Set-Content -Path $VersionFile -Encoding ASCII
-        Add-Log "Installed official sing-box $($release.tag_name)."
+        ([string]$release.tag_name) | Set-Content -Path $VersionFile -Encoding ASCII
+        Add-Log ('Installed official sing-box ' + $release.tag_name + '.')
     }
     finally {
         if (Test-Path $downloadDir) {
@@ -226,21 +225,10 @@ function Write-RelayConfigs {
     $front = [ordered]@{
         log = [ordered]@{ level = 'warn' }
         inbounds = @(
-            [ordered]@{
-                type = 'socks'
-                tag = 'phone-in'
-                listen = '0.0.0.0'
-                listen_port = $FrontPort
-            }
+            [ordered]@{ type = 'socks'; tag = 'phone-in'; listen = '0.0.0.0'; listen_port = $FrontPort }
         )
         outbounds = @(
-            [ordered]@{
-                type = 'socks'
-                tag = 'to-zdps'
-                server = '127.0.0.1'
-                server_port = $RelayPort
-                version = '5'
-            }
+            [ordered]@{ type = 'socks'; tag = 'to-zdps'; server = '127.0.0.1'; server_port = $RelayPort; version = '5' }
         )
         route = [ordered]@{ final = 'to-zdps' }
     }
@@ -248,12 +236,7 @@ function Write-RelayConfigs {
     $relay = [ordered]@{
         log = [ordered]@{ level = 'warn' }
         inbounds = @(
-            [ordered]@{
-                type = 'socks'
-                tag = 'zdps-in'
-                listen = '127.0.0.1'
-                listen_port = $RelayPort
-            }
+            [ordered]@{ type = 'socks'; tag = 'zdps-in'; listen = '127.0.0.1'; listen_port = $RelayPort }
         )
         outbounds = @(
             [ordered]@{ type = 'direct'; tag = 'direct' }
@@ -279,13 +262,7 @@ function Write-RelayConfigs {
             }
         )
         outbounds = @(
-            [ordered]@{
-                type = 'socks'
-                tag = 'bpsr-pc'
-                server = $PcIp
-                server_port = $FrontPort
-                version = '5'
-            },
+            [ordered]@{ type = 'socks'; tag = 'bpsr-pc'; server = $PcIp; server_port = $FrontPort; version = '5' },
             [ordered]@{ type = 'direct'; tag = 'direct' }
         )
         route = [ordered]@{
@@ -324,7 +301,7 @@ ZDPS / DPS meter:
 IMPORTANT: Capture StarSEA only. Do NOT capture BPSRMobileFront.
 "@ | Set-Content -Path (Join-Path $OutputDir 'README-IMPORT.txt') -Encoding UTF8
 
-    Add-Log "Generated Android SFA profile for PC $PcIp."
+    Add-Log ('Generated Android SFA profile for PC ' + $PcIp + '.')
 }
 
 function Get-RecordedPids {
@@ -339,11 +316,11 @@ function Get-RecordedPids {
 }
 
 function Test-ExpectedProcess {
-    param([int]$Id, [string]$ExpectedName)
-    if ($Id -le 0) { return $false }
+    param([int]$ProcessId, [string]$ExpectedName)
+    if ($ProcessId -le 0) { return $false }
     try {
-        $p = Get-Process -Id $Id -ErrorAction Stop
-        return $p.ProcessName -eq $ExpectedName
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $proc.ProcessName -eq $ExpectedName
     }
     catch {
         return $false
@@ -359,18 +336,18 @@ function Stop-Relay {
     }
 
     $targets = @(
-        [PSCustomObject]@{ Id = [int]$pids.frontPid; Name = 'BPSRMobileFront' },
-        [PSCustomObject]@{ Id = [int]$pids.starPid; Name = 'StarSEA' }
+        [PSCustomObject]@{ ProcessId = [int]$pids.frontPid; Name = 'BPSRMobileFront' },
+        [PSCustomObject]@{ ProcessId = [int]$pids.starPid; Name = 'StarSEA' }
     )
 
     foreach ($target in $targets) {
-        if (Test-ExpectedProcess -Id $target.Id -ExpectedName $target.Name) {
+        if (Test-ExpectedProcess -ProcessId $target.ProcessId -ExpectedName $target.Name) {
             try {
-                Stop-Process -Id $target.Id -Force -ErrorAction Stop
-                Add-Log "Stopped $($target.Name) (PID $($target.Id))."
+                Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop
+                Add-Log ('Stopped ' + $target.Name + ' (PID ' + $target.ProcessId + ').')
             }
             catch {
-                Add-Log "Warning: could not stop $($target.Name): $($_.Exception.Message)"
+                Add-Log ('Warning: could not stop ' + $target.Name + ': ' + $_.Exception.Message)
             }
         }
     }
@@ -390,15 +367,15 @@ function Assert-NoUntrackedRelayProcesses {
 
     $foreign = @()
     foreach ($name in @('BPSRMobileFront', 'StarSEA')) {
-        foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-            $isTracked = ($name -eq 'BPSRMobileFront' -and $p.Id -eq $trackedFront) -or
-                         ($name -eq 'StarSEA' -and $p.Id -eq $trackedStar)
-            if (-not $isTracked) { $foreign += "$name (PID $($p.Id))" }
+        foreach ($proc in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            $isTracked = ($name -eq 'BPSRMobileFront' -and $proc.Id -eq $trackedFront) -or
+                         ($name -eq 'StarSEA' -and $proc.Id -eq $trackedStar)
+            if (-not $isTracked) { $foreign += ($name + ' (PID ' + $proc.Id + ')') }
         }
     }
 
     if ($foreign.Count -gt 0) {
-        throw ("Existing untracked relay process detected: " + ($foreign -join ', ') + ". Close it manually before starting a new relay. The manager will not kill unrelated/untracked processes automatically.")
+        throw ('Existing untracked relay process detected: ' + ($foreign -join ', ') + '. Close it manually first. The manager will not kill untracked processes automatically.')
     }
 }
 
@@ -411,16 +388,19 @@ function Start-Relay {
     Assert-NoUntrackedRelayProcesses
     Stop-Relay
 
-    Add-Log 'Starting hidden relay processes...'
     $star = $null
     $front = $null
     try {
-        $star = Start-Process -FilePath $StarExe -ArgumentList ("run -c `"$RelayConfig`\"") -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
+        Add-Log 'Starting StarSEA and BPSRMobileFront hidden in the background...'
+
+        $starArgs = 'run -c ' + (Quote-Argument $RelayConfig)
+        $star = Start-Process -FilePath $StarExe -ArgumentList $starArgs -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
         Start-Sleep -Milliseconds 450
         $star.Refresh()
         if ($star.HasExited) { throw 'StarSEA exited immediately. Run Setup / Repair and try again.' }
 
-        $front = Start-Process -FilePath $FrontExe -ArgumentList ("run -c `"$FrontConfig`\"") -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
+        $frontArgs = 'run -c ' + (Quote-Argument $FrontConfig)
+        $front = Start-Process -FilePath $FrontExe -ArgumentList $frontArgs -WorkingDirectory $Runtime -WindowStyle Hidden -PassThru
         Start-Sleep -Milliseconds 450
         $front.Refresh()
         if ($front.HasExited) { throw 'BPSRMobileFront exited immediately. Port 10902 may already be in use.' }
@@ -431,11 +411,11 @@ function Start-Relay {
             started = (Get-Date).ToString('o')
         } | ConvertTo-Json | Set-Content -Path $PidFile -Encoding UTF8
 
-        Add-Log "Relay running: BPSRMobileFront PID $($front.Id), StarSEA PID $($star.Id)."
+        Add-Log ('Relay running. BPSRMobileFront PID ' + $front.Id + ', StarSEA PID ' + $star.Id + '.')
     }
     catch {
-        if ($front -and -not $front.HasExited) { Stop-Process -Id $front.Id -Force -ErrorAction SilentlyContinue }
-        if ($star -and -not $star.HasExited) { Stop-Process -Id $star.Id -Force -ErrorAction SilentlyContinue }
+        if ($front) { Stop-Process -Id $front.Id -Force -ErrorAction SilentlyContinue }
+        if ($star) { Stop-Process -Id $star.Id -Force -ErrorAction SilentlyContinue }
         Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
         throw
     }
@@ -446,7 +426,7 @@ function Start-Relay {
 
 function Setup-Relay {
     $pcIp = Get-SelectedIp
-    Add-Log "Setup / Repair started for PC LAN IP $pcIp."
+    Add-Log ('Setup / Repair started for PC LAN IP ' + $pcIp + '.')
 
     Stop-Relay
     Assert-NoUntrackedRelayProcesses
@@ -457,7 +437,7 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp
 
     Add-Log 'Setup / Repair complete.'
-    Add-Log 'Next: allow the firewall once, import the Android profile into SFA, configure ZDPS for StarSEA, then Start Relay.'
+    Add-Log 'Next: firewall -> import Android profile -> ZDPS StarSEA -> Start Relay.'
     Update-Status
 }
 
@@ -470,21 +450,22 @@ Get-NetFirewallRule -DisplayName `$display -ErrorAction SilentlyContinue | Remov
 New-NetFirewallRule -DisplayName `$display -Direction Inbound -Action Allow -Protocol TCP -LocalPort $FrontPort -Profile Private | Out-Null
 "@ | Set-Content -Path $FirewallScript -Encoding UTF8
 
-    Add-Log 'Requesting Administrator permission to add the Private-network firewall rule...'
-    $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"$FirewallScript`\"")
+    Add-Log 'Requesting Administrator permission for the Private-network firewall rule...'
+    $fwArgs = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Argument $FirewallScript)
+    $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $fwArgs
     if ($proc.ExitCode -ne 0) {
-        throw "Firewall setup did not complete successfully (exit code $($proc.ExitCode))."
+        throw ('Firewall setup did not complete successfully (exit code ' + $proc.ExitCode + ').')
     }
-    Add-Log "Firewall ready: inbound TCP $FrontPort allowed on Private networks only."
+    Add-Log ('Firewall ready: inbound TCP ' + $FrontPort + ' allowed on Private networks only.')
 }
 
 function Open-ProfileFolder {
     Ensure-Directories
-    Start-Process -FilePath 'explorer.exe' -ArgumentList ("`"$OutputDir`\"") | Out-Null
+    Start-Process -FilePath 'explorer.exe' -ArgumentList (Quote-Argument $OutputDir) | Out-Null
 }
 
 function Copy-ZdpsSettings {
-    $text = "Capture Process: StarSEA`r`nListen IP: 127.0.0.1`r`nListen Port: $RelayPort"
+    $text = 'Capture Process: StarSEA' + "`r`n" + 'Listen IP: 127.0.0.1' + "`r`n" + ('Listen Port: ' + $RelayPort)
     [System.Windows.Forms.Clipboard]::SetText($text)
     Add-Log 'Copied ZDPS settings to clipboard.'
 }
@@ -493,9 +474,10 @@ function Test-TrackedRunning {
     param([string]$Property, [string]$ExpectedName)
     $pids = Get-RecordedPids
     if (-not $pids) { return $false }
-    $id = 0
-    try { $id = [int]$pids.$Property } catch { return $false }
-    return Test-ExpectedProcess -Id $id -ExpectedName $ExpectedName
+
+    $processId = 0
+    try { $processId = [int]$pids.$Property } catch { return $false }
+    return Test-ExpectedProcess -ProcessId $processId -ExpectedName $ExpectedName
 }
 
 function Update-Status {
@@ -564,8 +546,12 @@ $script:cmbIp.DropDownStyle = 'DropDown'
 $form.Controls.Add($script:cmbIp)
 
 $candidates = @(Get-LanIPv4Candidates)
+$seenIps = @{}
 foreach ($candidate in $candidates) {
-    [void]$script:cmbIp.Items.Add($candidate.IP)
+    if (-not $seenIps.ContainsKey($candidate.IP)) {
+        [void]$script:cmbIp.Items.Add($candidate.IP)
+        $seenIps[$candidate.IP] = $true
+    }
 }
 if ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
 
@@ -606,7 +592,7 @@ $zdpsBox.Size = New-Object System.Drawing.Size(705, 100)
 $form.Controls.Add($zdpsBox)
 
 $zdpsText = New-Object System.Windows.Forms.Label
-$zdpsText.Text = "Capture Process: StarSEA     |     Listen IP: 127.0.0.1     |     Listen Port: $RelayPort`r`nIMPORTANT: Do NOT capture BPSRMobileFront or DPS may be counted twice."
+$zdpsText.Text = 'Capture Process: StarSEA     |     Listen IP: 127.0.0.1     |     Listen Port: 10903' + "`r`n" + 'IMPORTANT: Do NOT capture BPSRMobileFront or DPS may be counted twice.'
 $zdpsText.Location = New-Object System.Drawing.Point(14, 24)
 $zdpsText.Size = New-Object System.Drawing.Size(675, 42)
 $zdpsBox.Controls.Add($zdpsText)
@@ -680,7 +666,7 @@ $timer.Add_Tick({ Update-Status })
 $timer.Start()
 
 Update-Status
-Add-Log 'Ready. First-time flow: Setup / Repair -> Firewall -> import Android profile -> ZDPS StarSEA -> Start Relay.'
+Add-Log 'Ready. First time: Setup / Repair -> Firewall -> import Android profile -> ZDPS StarSEA -> Start Relay.'
 
 [void]$form.ShowDialog()
 $timer.Stop()
