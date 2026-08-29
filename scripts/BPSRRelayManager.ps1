@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.1'
+$ManagerVersion = '1.0.2'
 $TestedSingBoxVersion = 'v1.13.19'
 $FrontPort = 10808
 $InternalPortStart = 18080
@@ -501,9 +501,9 @@ function Write-RelayConfigs {
     $importText = @"
 BPSR Android DPSMeter Relay
 
-IMPORTANT FOR v1.0.1:
+IMPORTANT FOR v1.0.2-rc.1:
 If upgrading from an older test build, remove its old BPSR Relay profile and import this newly generated profile.
-v1.0.1 keeps the field-tested Clean v4 routing shape unchanged.
+v1.0.2-rc.1 keeps the field-tested Clean v4 routing shape unchanged.
 
 PC LAN IPv4 in this profile: $PcIp
 Phone relay port: $FrontPort
@@ -963,6 +963,62 @@ function Wait-ForProcessListener {
 }
 
 
+function Test-FirewallProfileIsPrivate {
+    param($Value)
+
+    foreach ($item in @($Value)) {
+        $text = ([string]$item).Trim()
+        if ($text.Equals('Private', [System.StringComparison]::OrdinalIgnoreCase) -or $text -eq '2') {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-FirewallProtocolMatches {
+    param($Value, [string]$Expected)
+
+    $accepted = switch ($Expected.ToUpperInvariant()) {
+        'TCP' { @('TCP', '6') }
+        'UDP' { @('UDP', '17') }
+        default { @($Expected) }
+    }
+
+    foreach ($item in @($Value)) {
+        $text = ([string]$item).Trim()
+        foreach ($candidate in $accepted) {
+            if ($text.Equals($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Test-FirewallValueContains {
+    param($Value, [string]$Expected)
+
+    foreach ($item in @($Value)) {
+        if (([string]$item).Trim().Equals($Expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-FirewallLocalSubnetScope {
+    param($Value)
+
+    foreach ($item in @($Value)) {
+        $text = ([string]$item).Trim()
+        if ($text.Equals('LocalSubnet', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $text.Equals('LocalSubnet4', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-FirewallReady {
     param([string]$PcIp)
     if ((Get-NetworkCategoryForIp -Address $PcIp) -ne 'Private') { return $false }
@@ -971,27 +1027,36 @@ function Test-FirewallReady {
     $udpReady = $false
     try {
         $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue | Where-Object {
-            $_.Enabled -eq 'True' -and
-            $_.Direction -eq 'Inbound' -and
-            $_.Action -eq 'Allow' -and
-            $_.Profile -match 'Private'
+            ([string]$_.Enabled).Equals('True', [System.StringComparison]::OrdinalIgnoreCase) -and
+            ([string]$_.Direction).Equals('Inbound', [System.StringComparison]::OrdinalIgnoreCase) -and
+            ([string]$_.Action).Equals('Allow', [System.StringComparison]::OrdinalIgnoreCase) -and
+            (Test-FirewallProfileIsPrivate -Value $_.Profile)
         })
 
         foreach ($rule in $rules) {
-            $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
-            $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
-            if (-not $port -or -not $addr) { continue }
+            $ports = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue)
+            $addresses = @(Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue)
+            if ($ports.Count -eq 0 -or $addresses.Count -eq 0) { continue }
 
-            $locals = @($addr.LocalAddress)
-            $remotes = @($addr.RemoteAddress)
-            if ([string]$port.LocalPort -ne [string]$FrontPort -or
-                -not ($locals -contains $PcIp) -or
-                -not ($remotes -contains 'LocalSubnet')) {
-                continue
+            foreach ($port in $ports) {
+                if (-not (Test-FirewallValueContains -Value $port.LocalPort -Expected ([string]$FrontPort))) {
+                    continue
+                }
+
+                foreach ($addr in $addresses) {
+                    if (-not (Test-FirewallValueContains -Value $addr.LocalAddress -Expected $PcIp)) {
+                        continue
+                    }
+                    if (-not (Test-FirewallLocalSubnetScope -Value $addr.RemoteAddress)) {
+                        continue
+                    }
+
+                    # Windows NetSecurity may expose Protocol as either
+                    # TCP/UDP names or IANA numbers 6/17.
+                    if (Test-FirewallProtocolMatches -Value $port.Protocol -Expected 'TCP') { $tcpReady = $true }
+                    if (Test-FirewallProtocolMatches -Value $port.Protocol -Expected 'UDP') { $udpReady = $true }
+                }
             }
-
-            if ([string]$port.Protocol -eq 'TCP') { $tcpReady = $true }
-            if ([string]$port.Protocol -eq 'UDP') { $udpReady = $true }
         }
     }
     catch { return $false }
@@ -1091,8 +1156,8 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
 
-    Add-Log 'Setup / Repair complete. v1.0.1 keeps the original Clean v4 two-stage SOCKS5 route.'
-    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.1 profile.'
+    Add-Log 'Setup / Repair complete. v1.0.2-rc.1 keeps the original Clean v4 two-stage SOCKS5 route.'
+    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.2-rc.1 profile.'
     Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
@@ -1345,10 +1410,10 @@ function Get-PreflightChecks {
 
     $profileIp = Get-ProfilePcIp
     if ($profileIp -eq $PcIp) {
-        Add-CheckLocal 'Android profile' 'OK' ('v1.0.1 v4-compatible profile matches ' + $PcIp)
+        Add-CheckLocal 'Android profile' 'OK' ('v1.0.2-rc.1 v4-compatible profile matches ' + $PcIp)
     }
     elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
-        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.1 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.2-rc.1 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
     }
     else {
         Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
@@ -1431,7 +1496,7 @@ function Start-Relay {
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'v1.0.1 two-stage relay is already running.'
+        Add-Log 'v1.0.2-rc.1 two-stage relay is already running.'
         Update-Status
         return
     }
@@ -1580,7 +1645,7 @@ Phone relay TCP listener: $listenerText
 Localhost StarSEA bridge port: $internalPortText
 Topology: $topology
 Ingress transport: authenticated SOCKS5 on trusted Private LAN
-Phone-to-PC encryption: DISABLED in v1.0.1 compatibility mode
+Phone-to-PC encryption: DISABLED in v1.0.2-rc.1 compatibility mode
 Android protocol sniffing: DISABLED
 Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
 Multiplexing: DISABLED
@@ -1683,6 +1748,27 @@ function Invoke-SelfTest {
     }
     if ($sourceText -notmatch 'Protocol UDP') {
         throw 'Self-test found missing UDP trusted-LAN firewall rule.'
+    }
+
+
+    # Accept Windows' friendly and numeric representations, but do not
+    # accept broader profiles/scopes such as Any.
+    if (-not (Test-FirewallProfileIsPrivate -Value 'Private') -or
+        -not (Test-FirewallProfileIsPrivate -Value '2') -or
+        (Test-FirewallProfileIsPrivate -Value 'Any')) {
+        throw 'Self-test found incompatible or over-broad firewall profile normalization.'
+    }
+    if (-not (Test-FirewallProtocolMatches -Value 'TCP' -Expected 'TCP') -or
+        -not (Test-FirewallProtocolMatches -Value '6' -Expected 'TCP') -or
+        -not (Test-FirewallProtocolMatches -Value 'UDP' -Expected 'UDP') -or
+        -not (Test-FirewallProtocolMatches -Value '17' -Expected 'UDP') -or
+        (Test-FirewallProtocolMatches -Value '17' -Expected 'TCP')) {
+        throw 'Self-test found incompatible firewall protocol normalization.'
+    }
+    if (-not (Test-FirewallLocalSubnetScope -Value 'LocalSubnet') -or
+        -not (Test-FirewallLocalSubnetScope -Value 'LocalSubnet4') -or
+        (Test-FirewallLocalSubnetScope -Value 'Any')) {
+        throw 'Self-test found incompatible or over-broad LocalSubnet normalization.'
     }
 
     Ensure-TestedSingBox
