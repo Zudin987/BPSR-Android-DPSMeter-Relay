@@ -782,6 +782,15 @@ function Test-ExpectedProcess {
     catch { return $false }
 }
 
+function Get-ExpectedRelayPath {
+    param([string]$ProcessName)
+    switch ($ProcessName) {
+        'StarSEA' { return $StarExe }
+        'BPSRMobileFront' { return $FrontExe }
+        'BPSRRelayIngress' { return (Join-Path $Runtime 'BPSRRelayIngress.exe') }
+        default { return '' }
+    }
+}
 function Stop-ProfileShare {
     if ($script:shareProcess) {
         try {
@@ -801,9 +810,24 @@ function Stop-ProfileShare {
 function Stop-Relay {
     $state = Get-RecordedPids
     if (-not $state) {
-        Clear-TrackedRelayIdentity
-        Update-Status
-        return
+        # If pids.json becomes corrupt while this manager is open, keep using
+        # the already-validated in-memory PID/start-time identity. The normal
+        # exact executable-path checks below still gate every process kill.
+        if ($script:trackedStarPid -gt 0 -or $script:trackedFrontPid -gt 0) {
+            $state = [PSCustomObject]@{
+                starPid = $script:trackedStarPid
+                starStartUtc = $script:trackedStarStartUtc
+                frontPid = $script:trackedFrontPid
+                frontStartUtc = $script:trackedFrontStartUtc
+                ingressPid = 0
+            }
+            Add-Log 'PID state file missing/unreadable; using in-memory relay identity for safe stop.'
+        }
+        else {
+            Clear-TrackedRelayIdentity
+            Update-Status
+            return
+        }
     }
 
     # Stop the phone-facing process first so no new traffic can enter while

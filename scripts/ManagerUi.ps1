@@ -171,22 +171,27 @@ function Close-OldRelayPrompt {
                 Add-Log ('Skipped old relay PID ' + $item.Id + ' because its start-time identity could not be recorded. Refresh and try again.')
                 continue
             }
-            $current = Get-Process -Id ([int]$item.Id) -ErrorAction Stop
-            if ([string]$current.ProcessName -ne [string]$item.Name) { continue }
-            $expectedStart = [DateTime]::Parse([string]$item.StartUtc).ToUniversalTime()
-            $actualStart = $current.StartTime.ToUniversalTime()
-            if ([Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 2) {
-                Add-Log ('Skipped PID ' + $item.Id + ' because the process identity changed before cleanup.')
+
+            $expectedPath = Get-ExpectedRelayPath -ProcessName ([string]$item.Name)
+            if ([string]::IsNullOrWhiteSpace($expectedPath)) {
+                Add-Log ('Skipped old relay PID ' + $item.Id + ' because its executable name is not managed by this project.')
                 continue
             }
+
+            # Re-check PID + exact project executable path + start time immediately
+            # before Stop-Process. A same-named unrelated process must never be killed.
+            if (-not (Test-ExpectedProcess -ProcessId ([int]$item.Id) -ExpectedPath $expectedPath -ExpectedStartUtc ([string]$item.StartUtc))) {
+                Add-Log ('Skipped ' + $item.Name + ' PID ' + $item.Id + ' because it is not the exact project relay process recorded by path/start time.')
+                continue
+            }
+
             Stop-Process -Id ([int]$item.Id) -Force -ErrorAction Stop
-            Add-Log ('Closed old relay ' + $item.Name + ' (PID ' + $item.Id + ') after PID/name/start-time verification and user confirmation.')
+            Add-Log ('Closed old project relay ' + $item.Name + ' (PID ' + $item.Id + ') after PID/path/start-time verification and user confirmation.')
         }
         catch {
             Add-Log ('Could not close old relay PID ' + $item.Id + ': ' + $_.Exception.Message)
         }
     }
-
     Start-Sleep -Milliseconds 150
     $remaining = @(Get-ForeignRelayProcesses)
     Update-Status
@@ -789,7 +794,7 @@ $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
 $androidLeft.ForeColor = $Ui.Neutral
 $androidHelp.Controls.Add($androidLeft)
 $androidRight = New-Object System.Windows.Forms.Label
-$androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. Tap + > Scan QR Code.`r`n`r`n9. Scan the PC QR.`r`n`r`n10. Confirm BPSR Relay.`r`n`r`n11. Settings > Per-app proxy > BPSR only.`r`n`r`n12. Start SFA. Allow VPN permission.`r`n`r`n13. PC: Start Relay. Open BPSR."
+$androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. Tap + > Scan QR Code.`r`n`r`n9. Scan the PC QR.`r`n`r`n10. Confirm BPSR Relay.`r`n`r`n11. Settings > Per-app proxy > BPSR only.`r`n`r`n12. PC: Start Relay.`r`n13. Phone: Start SFA. Allow VPN permission.`r`n14. Open BPSR."
 $androidRight.Location = New-Object System.Drawing.Point(430, 43)
 $androidRight.Size = New-Object System.Drawing.Size(400, 240)
 $androidRight.ForeColor = $Ui.Neutral
@@ -916,6 +921,21 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
     if ($targetValue.Text -ne 'StarSEA') { throw 'DPS target card changed unexpectedly.' }
+    $cleanupSource = (Get-Command Close-OldRelayPrompt -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($needle in @('Get-ExpectedRelayPath -ProcessName','Test-ExpectedProcess -ProcessId ([int]$item.Id) -ExpectedPath $expectedPath -ExpectedStartUtc','same-named unrelated process must never be killed')) {
+        if (-not $cleanupSource.Contains($needle)) { throw ('Stale-process safety self-test failed: ' + $needle) }
+    }
+    if ($cleanupSource.Contains('$current.ProcessName -ne [string]$item.Name')) { throw 'Unsafe name/start-time-only stale cleanup was reintroduced.' }
+
+    $stopSource = (Get-Command Stop-Relay -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($needle in @('PID state file missing/unreadable; using in-memory relay identity for safe stop.','$script:trackedStarPid','$script:trackedFrontPid','Test-ExpectedProcess')) {
+        if (-not $stopSource.Contains($needle)) { throw ('PID recovery self-test failed: ' + $needle) }
+    }
+
+    foreach ($needle in @('12. PC: Start Relay.','13. Phone: Start SFA. Allow VPN permission.','14. Open BPSR.')) {
+        if (-not $androidRight.Text.Contains($needle)) { throw ('Android startup-order self-test failed: ' + $needle) }
+    }
+    if ($androidRight.Text.Contains('12. Start SFA. Allow VPN permission.')) { throw 'Old phone-before-PC startup order was reintroduced.' }
 
     if (-not [string]::IsNullOrWhiteSpace($env:BPSR_RELAY_UI_CAPTURE_DIR)) {
         $captureDir = $env:BPSR_RELAY_UI_CAPTURE_DIR
