@@ -2,7 +2,7 @@
 
 A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter.
 
-Current test build: **v1.0.0-rc.10**
+Current test build: **v1.0.0-rc.11**
 
 ## Quick start
 
@@ -31,6 +31,8 @@ The app has only three pages:
 - **Home** — normal setup and daily use.
 - **Details** — logs, report, recovery tools.
 - **Help** — short instructions and common fixes.
+
+RC.11 was rebuilt from real Windows screenshots after RC.10 exposed text clipping and wasted space. The current Home, Details, and Help layouts are also rendered to Windows preview images during UI audit so visual problems can be caught in addition to control-bound checks.
 
 ## If something is red
 
@@ -143,7 +145,7 @@ Runtime files stay local under `.runtime/`. Generated phone files stay under `ou
 
 ## Release status
 
-RC.10 is an automated-test release candidate, not the stable v1.0.0 release yet.
+RC.11 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.
 
 Before stable release, a real Android + Windows test still needs to confirm:
 
