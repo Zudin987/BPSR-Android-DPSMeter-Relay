@@ -66,15 +66,17 @@ You do **not** manually download, rename, or configure sing-box on Windows.
 
 ### 1. Open the manager
 
-Download/extract the repository and double-click:
+Download the release ZIP, extract it, and double-click:
 
 ```text
-BPSR Relay Manager.bat
+BPSR Relay Manager.exe
 ```
+
+That EXE is the normal user-facing entry point. It is a tiny open-source Windows launcher that starts the existing manager GUI with the PowerShell console hidden; it does not proxy traffic, stay in the gameplay data path, or bundle sing-box.
 
 The manager tries to select the most likely physical Wi-Fi/Ethernet IPv4 automatically. If needed, choose the PC LAN address the phone can reach.
 
-A small launcher wrapper keeps the PowerShell console hidden during normal use but shows a visible error dialog if the manager fails before its UI can open.
+The repository still keeps the BAT launcher as a developer/troubleshooting fallback, but the normal release package is EXE-first so users do not need to open a BAT file.
 
 ### 2. `Setup / Repair`
 
@@ -303,6 +305,7 @@ The repository's Windows validation workflow checks the release-critical behavio
 - no sniff, multiplexing, unsupported Android `strict_route`, or legacy raw SOCKS path
 - encrypted end-to-end relay smoke traffic
 - temporary phone-profile page behavior
+- native `BPSR Relay Manager.exe` launcher compilation and packaged self-test
 - clean end-user ZIP contents and SHA256 generation
 
 The stable release workflow additionally requires a successful **Validate** run for the exact commit being published and an explicit real-device field-test confirmation.
@@ -372,6 +375,7 @@ The manager deliberately refuses to kill an untracked process just because it ha
 
 ## Safety / transparency
 
+- the release package contains one small user-facing `BPSR Relay Manager.exe` launcher; it does not contain sing-box or `StarSEA.exe`
 - no sing-box executable is committed to this repository
 - only the pinned tested official SagerNet release is downloaded by Setup
 - the official GitHub asset SHA256 digest is mandatory
