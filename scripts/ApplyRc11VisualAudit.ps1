@@ -69,46 +69,4 @@ $newPass = @'
 '@
 Replace-Exact -Path 'scripts\ManagerUi.ps1' -Old $oldPass -New $newPass
 
-$validatePath = '.github\workflows\validate.yml'
-$validate = Get-Content -LiteralPath $validatePath -Raw
-$oldStep = @'
-      - name: Test simple manager UI layout
-        shell: powershell
-        run: |
-          $env:BPSR_RELAY_UI_SELF_TEST = '1'
-          try {
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          finally {
-            Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue
-          }
-'@
-$newStep = @'
-      - name: Test and render simple manager UI
-        shell: powershell
-        run: |
-          $env:BPSR_RELAY_UI_SELF_TEST = '1'
-          $env:BPSR_RELAY_UI_CAPTURE_DIR = Join-Path $env:RUNNER_TEMP 'bpsr-ui-preview'
-          try {
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          finally {
-            Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue
-            Remove-Item Env:BPSR_RELAY_UI_CAPTURE_DIR -ErrorAction SilentlyContinue
-          }
-
-      - name: Upload UI preview
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-preview
-          path: ${{ runner.temp }}/bpsr-ui-preview/*.png
-          if-no-files-found: error
-          retention-days: 7
-'@
-if (-not $validate.Contains($oldStep)) { throw 'Validate UI test step was not found.' }
-$validate = $validate.Replace($oldStep, $newStep)
-[System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $validatePath), $validate, (New-Object System.Text.UTF8Encoding($false)))
-
-Write-Host 'RC.11 visual audit patch applied.'
+Write-Host 'RC.11 app-only visual audit patch applied.'
