@@ -2,22 +2,22 @@
 
 A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter on the PC.
 
-Current test build: **v1.0.0-rc.15**
+Current stable release: **v1.0.0**
 
-> RC.15 is a compatibility test build. It restores the network path from the original **Clean v4** ZIP because the newer RC.13/RC.14 Shadowsocks/port-routing path did not work in the real Android field test.
+> v1.0.0 keeps the field-tested **Clean v4-compatible** two-stage SOCKS5 path validated on real Android + BPSR + DPS-meter use.
 
 ## Quick start
 
 ### First setup / upgrading from RC.14
 
-1. Extract the RC.15 ZIP to a fresh folder.
+1. Extract the v1.0.0 ZIP to a fresh folder.
 2. Run **BPSR Relay Manager.exe**.
 3. On **Home**, choose the PC Ethernet/Wi-Fi address connected to the same router as the phone.
 4. Click **Prepare Relay**.
 5. Click **Allow Firewall**. The manager requires a **Private** Windows network and keeps the relay restricted to your selected PC IP and local subnet.
 6. On Android SFA, **delete or disable the old RC.13/RC.14 BPSR Relay profile**.
 7. On the PC, click **Start Phone Setup**.
-8. In SFA: **+ → Scan QR Code**, then import the newly generated RC.15 profile.
+8. In SFA: **+ → Scan QR Code**, then import the newly generated v1.0.0 profile.
 9. In SFA per-app/proxy-app settings, select **BPSR only**.
 10. Start SFA.
 11. On the PC DPS meter, use **StarSEA** as the game/capture process. Do **not** target `BPSRMobileFront`.
@@ -29,9 +29,9 @@ Current test build: **v1.0.0-rc.15**
 
 You normally do not need to run Prepare Relay or re-import the profile again unless the PC LAN IP changes, the relay is upgraded, or the manager tells you to repair setup.
 
-## RC.15 compatibility architecture
+## v1.0.0 compatibility architecture
 
-RC.15 intentionally uses the **v4-compatible** transport shape of the original Clean v4 setup:
+v1.0.0 intentionally uses the **v4-compatible** transport shape of the original Clean v4 setup:
 
 ```text
 Android BPSR
@@ -47,7 +47,7 @@ BPSR game server
 
 `BPSRMobileFront` is only the phone-facing proxy. **StarSEA is the only relay process that connects onward to the game server**, which keeps one clear capture path for compatible DPS meters.
 
-This is deliberately different from RC.13/RC.14, which used Shadowsocks 2022 plus BPSR-port-specific Android routing. That design passed synthetic CI but failed the real Android/BPSR test, so RC.15 prioritizes the known field-tested Clean v4 shape instead.
+This is deliberately different from RC.13/RC.14, which used Shadowsocks 2022 plus BPSR-port-specific Android routing. That design passed synthetic CI but failed the real Android/BPSR test, so v1.0.0 prioritizes the known field-tested Clean v4 shape instead.
 
 ## DPS meter setup
 
@@ -63,7 +63,7 @@ The relay is **DPS-meter agnostic**. Any DPS meter that can parse BPSR traffic f
 
 ## Why two relay processes?
 
-This is intentional in RC.15 and comes directly from the original Clean v4 topology:
+This is intentional in v1.0.0 and comes directly from the original Clean v4 topology:
 
 - `BPSRMobileFront.exe` accepts the Android SOCKS5 connection on the LAN.
 - It can only forward to the localhost StarSEA bridge.
@@ -87,11 +87,11 @@ The generated SFA profile uses:
 
 `strict_route` is intentionally absent because the SFA Android build does not implement that TUN option.
 
-**Important:** RC.15 uses a different Android transport from RC.14. Do not reuse the old RC.14 SFA profile. Prepare Relay and import the new RC.15 QR/profile.
+**Important:** v1.0.0 uses a different Android transport from RC.14. Do not reuse the old RC.14 SFA profile. Prepare Relay and import the new v1.0.0 QR/profile.
 
 ## Network safety
 
-RC.15 prioritizes compatibility with the original working setup. The phone → PC hop is **authenticated SOCKS5 but not encrypted**.
+v1.0.0 prioritizes compatibility with the original working setup. The phone → PC hop is **authenticated SOCKS5 but not encrypted**.
 
 Use it only on a **trusted home/private LAN**:
 
@@ -127,7 +127,7 @@ Short Android/SFA instructions and common fixes for non-technical users.
 
 ### BPSR stops connecting as soon as SFA starts
 
-Make sure you are using the **new RC.15 profile**, not the old RC.13/RC.14 profile. In SFA, delete/disable the old BPSR Relay profile, then use **Start Phone Setup** on the PC and scan the new QR.
+Make sure you are using the **new v1.0.0 profile**, not the old RC.13/RC.14 profile. In SFA, delete/disable the old BPSR Relay profile, then use **Start Phone Setup** on the PC and scan the new QR.
 
 ### Firewall says Network is Public
 
@@ -149,7 +149,7 @@ Use **StarSEA** as the capture/process target. Do not target BPSRMobileFront. If
 
 ### DPS appears doubled
 
-Stop the relay, close old relay processes, and run **Prepare Relay** again. RC.15 checks for foreign/duplicate `StarSEA`, `BPSRMobileFront`, and legacy `BPSRRelayIngress` processes before starting.
+Stop the relay, close old relay processes, and run **Prepare Relay** again. v1.0.0 checks for foreign/duplicate `StarSEA`, `BPSRMobileFront`, and legacy `BPSRRelayIngress` processes before starting.
 
 ## Latency design
 
@@ -182,17 +182,9 @@ The launcher is currently unsigned, so Windows SmartScreen may show a reputation
 
 ## Release status
 
-RC.15 is an automated-test release candidate, **not** stable v1.0.0 yet.
+**v1.0.0 is the current stable release.**
 
-Before stable release, complete a real Android + Windows + BPSR field test and confirm:
-
-- the new RC.15 SFA profile imports and starts
-- BPSR connects and plays normally through SFA
-- gameplay latency is acceptable
-- the compatible DPS meter reads `StarSEA`
-- DPS is not doubled
-
-Only after that real test passes should the source version be changed to `1.0.0`, the PR merged, exact-main CI validated, and stable release published.
+The Clean-v4-compatible Android -> BPSRMobileFront -> localhost StarSEA path passed the real Android + Windows + SFA + BPSR + compatible DPS-meter field test, including normal gameplay connectivity, acceptable latency, DPS capture, and no doubled DPS.
 
 ## Disclaimer
 

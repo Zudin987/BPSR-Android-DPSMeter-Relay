@@ -48,7 +48,7 @@ jobs:
           $smoke = Get-Content 'scripts\TestRelaySmoke.ps1' -Raw
 
           $required = @(
-            "`$ManagerVersion = '1.0.0-rc.15'",
+            "`$ManagerVersion = '1.0.0'",
             "`$TestedSingBoxVersion = 'v1.13.19'",
             '$FrontPort = 10808',
             '$InternalPortStart = 18080',
@@ -81,7 +81,7 @@ jobs:
           )
           foreach ($needle in $required) {
             if (-not $text.Contains($needle)) {
-              Write-Error ('Missing critical RC.15 invariant: ' + $needle)
+              Write-Error ('Missing critical v1.0.0 invariant: ' + $needle)
               exit 1
             }
           }
@@ -97,11 +97,11 @@ jobs:
           $writeSegment = $text.Substring($writeStart, $writeEnd - $writeStart)
           foreach ($forbidden in @("type = 'shadowsocks'", '2022-blake3-aes-128-gcm', 'BPSRRelayIngress', 'multiplex')) {
             if ($writeSegment.Contains($forbidden)) {
-              throw ('RC.14 transport leaked back into RC.15 generated configs: ' + $forbidden)
+              throw ('RC.14 transport leaked back into v1.0.0 generated configs: ' + $forbidden)
             }
           }
           foreach ($needle in @("type = 'socks'", "server = '127.0.0.1'", "final = 'bpsr-pc'", 'route_exclude_address')) {
-            if (-not $writeSegment.Contains($needle)) { throw ('RC.15 config generator is missing: ' + $needle) }
+            if (-not $writeSegment.Contains($needle)) { throw ('v1.0.0 config generator is missing: ' + $needle) }
           }
 
           $uiRequired = @(
@@ -174,7 +174,7 @@ jobs:
             if (-not $smoke.Contains($needle)) { throw ('V4-compatible smoke test missing: ' + $needle) }
           }
 
-          Write-Host 'Static RC.15 v4-compatible/latency/single-count/UI/package/release guards present.'
+          Write-Host 'Static v1.0.0 v4-compatible/latency/single-count/UI/package/release guards present.'
 
       - name: Test simple manager UI layout
         shell: powershell

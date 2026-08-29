@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.15'
+$ManagerVersion = '1.0.0'
 $TestedSingBoxVersion = 'v1.13.19'
 $FrontPort = 10808
 $InternalPortStart = 18080
@@ -370,7 +370,7 @@ function Write-RelayConfigs {
     Ensure-Directories
     $internalPort = Get-FreeInternalPort
 
-    # RC.15 restores the transport shape from the user's original Clean v4 pack:
+    # v1.0.0 restores the transport shape from the user's original Clean v4 pack:
     # Android -> BPSRMobileFront -> localhost -> StarSEA -> game server.
     $front = [ordered]@{
         log = [ordered]@{ disabled = $true; level = 'error' }
@@ -484,9 +484,9 @@ function Write-RelayConfigs {
     $importText = @"
 BPSR Android DPSMeter Relay
 
-IMPORTANT FOR RC.15:
+IMPORTANT FOR v1.0.0:
 Delete/disable the RC.14 SFA profile and import this newly generated profile.
-RC.15 restores the original Clean v4 routing shape for compatibility.
+v1.0.0 restores the original Clean v4 routing shape for compatibility.
 
 PC LAN IPv4 in this profile: $PcIp
 Phone relay port: $FrontPort
@@ -991,8 +991,8 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
 
-    Add-Log 'Setup / Repair complete. RC.15 now matches the original Clean v4 two-stage SOCKS5 route.'
-    Add-Log 'IMPORTANT: delete/disable the RC.14 SFA profile and import the newly generated RC.15 profile.'
+    Add-Log 'Setup / Repair complete. v1.0.0 now matches the original Clean v4 two-stage SOCKS5 route.'
+    Add-Log 'IMPORTANT: delete/disable the RC.14 SFA profile and import the newly generated v1.0.0 profile.'
     Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
@@ -1236,10 +1236,10 @@ function Get-PreflightChecks {
 
     $profileIp = Get-ProfilePcIp
     if ($profileIp -eq $PcIp) {
-        Add-CheckLocal 'Android profile' 'OK' ('RC.15 v4-compatible profile matches ' + $PcIp)
+        Add-CheckLocal 'Android profile' 'OK' ('v1.0.0 v4-compatible profile matches ' + $PcIp)
     }
     elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
-        Add-CheckLocal 'Android profile' 'FAIL' 'RC.15 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.0 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
     }
     else {
         Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
@@ -1315,7 +1315,7 @@ function Start-Relay {
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'RC.15 two-stage relay is already running.'
+        Add-Log 'v1.0.0 two-stage relay is already running.'
         Update-Status
         return
     }
@@ -1463,7 +1463,7 @@ Phone relay TCP listener: $listenerText
 Localhost StarSEA bridge port: $internalPortText
 Topology: $topology
 Ingress transport: authenticated SOCKS5 on trusted Private LAN
-Phone-to-PC encryption: DISABLED in RC.15 compatibility mode
+Phone-to-PC encryption: DISABLED in v1.0.0 compatibility mode
 Android protocol sniffing: DISABLED
 Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
 Multiplexing: DISABLED

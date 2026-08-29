@@ -108,7 +108,7 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Smoke-test encrypted relay data path
+      - name: Smoke-test v4-compatible two-stage relay data path
         shell: powershell
         run: |
           $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
