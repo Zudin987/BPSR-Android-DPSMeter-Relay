@@ -45,7 +45,11 @@ jobs:
           }
 
           $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
-          $match = [regex]::Match($manager, "\$ManagerVersion\s*=\s*'([^']+)'")
+          $match = [regex]::Match(
+            $manager,
+            '^\$ManagerVersion\s*=\s*''([^'']+)''',
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+          )
           if (-not $match.Success) { throw 'Could not read ManagerVersion.' }
           $sourceVersion = $match.Groups[1].Value.Trim()
           if ($sourceVersion -ne $version) {
