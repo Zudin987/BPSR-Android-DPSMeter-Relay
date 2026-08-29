@@ -96,6 +96,8 @@ try {
             if ($path.Contains('?')) { $path = $path.Substring(0, $path.IndexOf('?')) }
             $basePath = '/' + $Token + '/'
             $downloadRoute = $basePath + 'android-bpsr-relay.json'
+            $profileUrl = 'http://' + $BindIp + ':' + $Port + $downloadRoute
+            $sfaImportUrl = 'sing-box://import-remote-profile?url=' + [Uri]::EscapeDataString($profileUrl) + '#' + [Uri]::EscapeDataString('BPSR Relay')
             $headOnly = ($method -eq 'HEAD')
 
             if ($path -eq $basePath) {
@@ -117,9 +119,11 @@ code{background:#292929;padding:2px 6px;border-radius:5px}
 <body>
 <div class="card">
 <h2>BPSR Android DPSMeter Relay</h2>
-<p>Your temporary relay profile is ready.</p>
-<p><a class="button" href="android-bpsr-relay.json" download>Download SFA profile</a></p>
-<p class="small">Import the downloaded JSON into SFA. This sharing page automatically expires and is not used while gaming.</p>
+<p>Your BPSR profile is ready.</p>
+<p><a class="button" href="$sfaImportUrl">Open in SFA</a></p>
+<p class="small">Recommended: tap <strong>Open in SFA</strong>, then confirm BPSR Relay.</p>
+<p><a href="android-bpsr-relay.json" download>Download SFA profile</a></p>
+<p class="small">File download is the backup method. This page expires after setup and is not used while gaming.</p>
 </div>
 </body>
 </html>

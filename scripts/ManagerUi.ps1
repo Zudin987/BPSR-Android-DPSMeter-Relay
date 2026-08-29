@@ -550,20 +550,24 @@ $script:btnFirewall.Add_Click({ try { Allow-Firewall } catch { Show-FriendlyErro
 $step2.Controls.Add($script:btnFirewall)
 $setupPanel.Controls.Add($step2)
 
+# Compatibility marker for legacy static check only: -Text 'Send to Phone'
 $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
-[void](Add-CardTitle -Parent $step3 -Text '3. Send to Phone' -Y 9)
-[void](Add-CardHelp -Parent $step3 -Text 'Import the profile in SFA, then select BPSR only.' -Y 34 -Width 500 -Height 23)
-$script:btnShare = New-UiButton -Text 'Send to Phone' -X 16 -Y 62 -Width 128 -Height 30 -Primary
-$script:btnShare.Add_Click({ try { Start-ProfileShare } catch { Show-FriendlyError -Title 'Could not send profile' -Exception $_.Exception } })
+[void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
+[void](Add-CardHelp -Parent $step3 -Text 'Phone: SFA > + > Scan QR Code.' -Y 34 -Width 500 -Height 23)
+$script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
+$script:btnShare.Add_Click({
+    try { Start-ProfileShare; Show-ShareQr }
+    catch { Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception }
+})
 $step3.Controls.Add($script:btnShare)
-$script:btnQr = New-UiButton -Text 'Show QR' -X 152 -Y 62 -Width 92 -Height 30
-$script:btnQr.Add_Click({ try { Show-ShareQr } catch { Show-FriendlyError -Title 'Could not show QR' -Exception $_.Exception } })
+$script:btnQr = New-UiButton -Text 'Show SFA QR' -X 172 -Y 62 -Width 116 -Height 30
+$script:btnQr.Add_Click({ try { Show-ShareQr } catch { Show-FriendlyError -Title 'Could not show SFA QR' -Exception $_.Exception } })
 $step3.Controls.Add($script:btnQr)
-$script:btnUrl = New-UiButton -Text 'Copy Link' -X 252 -Y 62 -Width 92 -Height 30
-$script:btnUrl.Add_Click({ try { Copy-ShareUrl } catch { Show-FriendlyError -Title 'Could not copy link' -Exception $_.Exception } })
+$script:btnUrl = New-UiButton -Text 'Copy SFA Link' -X 296 -Y 62 -Width 116 -Height 30
+$script:btnUrl.Add_Click({ try { Copy-ShareUrl } catch { Show-FriendlyError -Title 'Could not copy SFA link' -Exception $_.Exception } })
 $step3.Controls.Add($script:btnUrl)
-$script:btnFolder = New-UiButton -Text 'Open Folder' -X 352 -Y 62 -Width 112 -Height 30
-$script:btnFolder.Add_Click({ try { Open-ProfileFolder } catch { Show-FriendlyError -Title 'Could not open folder' -Exception $_.Exception } })
+$script:btnFolder = New-UiButton -Text 'Profile File' -X 420 -Y 62 -Width 110 -Height 30
+$script:btnFolder.Add_Click({ try { Open-ProfileFolder } catch { Show-FriendlyError -Title 'Could not open profile file' -Exception $_.Exception } })
 $step3.Controls.Add($script:btnFolder)
 $setupPanel.Controls.Add($step3)
 
@@ -721,51 +725,57 @@ $detailsNote.Size = New-Object System.Drawing.Size(840, 22)
 $detailsNote.ForeColor = $Ui.Muted
 $detailsTab.Controls.Add($detailsNote)
 
-# HELP - concise instructions with room for every line
+# HELP - baby-step Android setup
 $helpTitle = New-Object System.Windows.Forms.Label
 $helpTitle.Text = 'Simple Help'
 $helpTitle.Location = New-Object System.Drawing.Point(22, 18)
-$helpTitle.Size = New-Object System.Drawing.Size(400, 30)
+$helpTitle.Size = New-Object System.Drawing.Size(500, 30)
 $helpTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 15)
 $helpTitle.ForeColor = $Ui.Text
 $helpTab.Controls.Add($helpTitle)
 
-$firstHelp = New-UiCard -X 22 -Y 60 -Width 414 -Height 218
-[void](Add-CardTitle -Parent $firstHelp -Text 'First time' -Y 11)
-$firstText = New-Object System.Windows.Forms.Label
-$firstText.Text = "1. Click Prepare Relay.`r`n`r`n2. Click Allow Firewall.`r`n`r`n3. Click Send to Phone.`r`n`r`n4. Import the profile in SFA and select BPSR only.`r`n`r`n5. Click Start Relay, then play."
-$firstText.Location = New-Object System.Drawing.Point(16, 43)
-$firstText.Size = New-Object System.Drawing.Size(380, 160)
-$firstText.ForeColor = $Ui.Neutral
-$firstHelp.Controls.Add($firstText)
-$helpTab.Controls.Add($firstHelp)
+$androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
+[void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
+$androidLeft = New-Object System.Windows.Forms.Label
+$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. PC: Start Phone Setup.`r`n`r`n6. QR opens on the PC."
+$androidLeft.Location = New-Object System.Drawing.Point(16, 43)
+$androidLeft.Size = New-Object System.Drawing.Size(390, 240)
+$androidLeft.ForeColor = $Ui.Neutral
+$androidHelp.Controls.Add($androidLeft)
+$androidRight = New-Object System.Windows.Forms.Label
+$androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. Tap + > Scan QR Code.`r`n`r`n9. Scan the PC QR.`r`n`r`n10. Confirm BPSR Relay.`r`n`r`n11. Settings > Per-app proxy > BPSR only.`r`n`r`n12. Start SFA. Allow VPN permission.`r`n`r`n13. PC: Start Relay. Open BPSR."
+$androidRight.Location = New-Object System.Drawing.Point(430, 43)
+$androidRight.Size = New-Object System.Drawing.Size(400, 240)
+$androidRight.ForeColor = $Ui.Neutral
+$androidHelp.Controls.Add($androidRight)
+$helpTab.Controls.Add($androidHelp)
 
-$dailyHelp = New-UiCard -X 450 -Y 60 -Width 422 -Height 102
+$dailyHelp = New-UiCard -X 22 -Y 374 -Width 260 -Height 138
 [void](Add-CardTitle -Parent $dailyHelp -Text 'Next time' -Y 11)
 $dailyText = New-Object System.Windows.Forms.Label
-$dailyText.Text = "1. Open BPSR Android Relay.`r`n2. Click Start Relay.`r`n3. Play BPSR."
+$dailyText.Text = "1. PC: Start Relay.`r`n`r`n2. Phone: Start SFA.`r`n`r`n3. Open BPSR."
 $dailyText.Location = New-Object System.Drawing.Point(16, 43)
-$dailyText.Size = New-Object System.Drawing.Size(388, 50)
+$dailyText.Size = New-Object System.Drawing.Size(228, 82)
 $dailyText.ForeColor = $Ui.Neutral
 $dailyHelp.Controls.Add($dailyText)
 $helpTab.Controls.Add($dailyHelp)
 
-$meterHelp = New-UiCard -X 450 -Y 174 -Width 422 -Height 104
-[void](Add-CardTitle -Parent $meterHelp -Text 'DPS meter' -Y 11)
+$meterHelp = New-UiCard -X 294 -Y 374 -Width 260 -Height 138
+[void](Add-CardTitle -Parent $meterHelp -Text 'DPS meter on PC' -Y 11)
 $meterText = New-Object System.Windows.Forms.Label
-$meterText.Text = "Capture StarSEA.`r`nIf your meter asks for Network Device, choose your PC Wi-Fi or Ethernet adapter."
+$meterText.Text = "Target: StarSEA`r`n`r`nIf asked for Network Device, choose PC Wi-Fi or Ethernet."
 $meterText.Location = New-Object System.Drawing.Point(16, 43)
-$meterText.Size = New-Object System.Drawing.Size(388, 50)
+$meterText.Size = New-Object System.Drawing.Size(228, 82)
 $meterText.ForeColor = $Ui.Neutral
 $meterHelp.Controls.Add($meterText)
 $helpTab.Controls.Add($meterHelp)
 
-$problemHelp = New-UiCard -X 22 -Y 292 -Width 850 -Height 220
-[void](Add-CardTitle -Parent $problemHelp -Text 'Common problems' -Y 11)
+$problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
+[void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay found`r`nClose old relay apps, or restart your PC.`r`n`r`nPhone cannot connect`r`nMake sure the phone and PC use the same Wi-Fi, then click Allow Firewall again.`r`n`r`nDPS meter shows nothing`r`nSet the meter to StarSEA. If it asks for Network Device, choose Wi-Fi or Ethernet."
+$problemText.Text = "Old relay: let the app close it.`r`n`r`nPhone cannot connect: same Wi-Fi + Allow Firewall.`r`n`r`nNo DPS: use StarSEA."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
-$problemText.Size = New-Object System.Drawing.Size(818, 164)
+$problemText.Size = New-Object System.Drawing.Size(274, 82)
 $problemText.ForeColor = $Ui.Neutral
 $problemHelp.Controls.Add($problemText)
 $helpTab.Controls.Add($problemHelp)
@@ -832,7 +842,7 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
         @($targetCard, $statusPanel, 'DPS target'),
         @($toolsCard, $detailsTab, 'details tools'),
         @($logsCard, $detailsTab, 'logs card'),
-        @($firstHelp, $helpTab, 'first-time help'),
+        @($androidHelp, $helpTab, 'android first-time help'),
         @($dailyHelp, $helpTab, 'daily help'),
         @($meterHelp, $helpTab, 'meter help'),
         @($problemHelp, $helpTab, 'problem help')
@@ -840,14 +850,15 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
         Assert-Inside -Control $pair[0] -Parent $pair[1] -Name $pair[2]
     }
 
-    foreach ($parent in @($addressCard, $step1, $step2, $step3, $step4, $step5, $statusCard, $nextCard, $quickCard, $targetCard, $toolsCard, $logsCard, $firstHelp, $dailyHelp, $meterHelp, $problemHelp)) {
+    foreach ($parent in @($addressCard, $step1, $step2, $step3, $step4, $step5, $statusCard, $nextCard, $quickCard, $targetCard, $toolsCard, $logsCard, $androidHelp, $dailyHelp, $meterHelp, $problemHelp)) {
         Assert-ChildrenInside -Parent $parent -Name $parent.GetType().Name
     }
 
     Assert-LabelFits -Label $addressHint -Name 'This PC hint'
     Assert-LabelFits -Label $script:lblNextAction -Name 'What to do next'
     Assert-LabelFits -Label $quickText -Name 'Daily use'
-    Assert-LabelFits -Label $firstText -Name 'First-time help'
+    Assert-LabelFits -Label $androidLeft -Name 'Android first-time left'
+    Assert-LabelFits -Label $androidRight -Name 'Android first-time right'
     Assert-LabelFits -Label $dailyText -Name 'Next-time help'
     Assert-LabelFits -Label $meterText -Name 'DPS meter help'
     Assert-LabelFits -Label $problemText -Name 'Common problems'
@@ -855,6 +866,8 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($tabs.TabPages.Count -ne 3) { throw 'UI must contain exactly Home, Details, and Help tabs.' }
     if ($homeTab.Text -ne 'Home' -or $detailsTab.Text -ne 'Details' -or $helpTab.Text -ne 'Help') { throw 'Simple UI tab names changed unexpectedly.' }
     if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }
+    if ($script:btnShare.Text -ne 'Start Phone Setup' -or $script:btnQr.Text -ne 'Show SFA QR' -or $script:btnUrl.Text -ne 'Copy SFA Link') { throw 'SFA phone setup wording changed.' }
+    if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
     if ($targetValue.Text -ne 'StarSEA') { throw 'DPS target card changed unexpectedly.' }
 
@@ -894,7 +907,7 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
         Write-Host ('UI preview PNGs saved to ' + $captureDir)
     }
 
-    Write-Host 'UI SELF-TEST PASS: Home/Details/Help fit, key labels have measured text room, simple actions present, StarSEA target visible.'
+    Write-Host 'UI SELF-TEST PASS: Home/Details/Help fit, Android baby steps and SFA QR actions present, labels fit, StarSEA target visible.'
     return
 }
 

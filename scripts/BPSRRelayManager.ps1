@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.12'
+$ManagerVersion = '1.0.0-rc.13'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -931,27 +931,38 @@ function Start-ProfileShare {
     }
 
     $script:shareUrl = 'http://' + $pcIp + ':' + $FrontPort + '/' + $token + '/'
-    [System.Windows.Forms.Clipboard]::SetText($script:shareUrl)
-    Add-Log ('Temporary profile page started for up to ' + $ShareLifetimeSeconds + ' seconds. URL copied to clipboard.')
-    Add-Log 'The share server stops after the profile is downloaded and is never part of the gameplay data path.'
+    [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
+    Add-Log ('Temporary SFA setup started for up to ' + $ShareLifetimeSeconds + ' seconds. SFA import link copied.')
+    Add-Log 'The share server stops after SFA downloads the profile and is never part of gameplay traffic.'
     Update-Status
 }
 
+function Get-ProfileDownloadUrl {
+    if ([string]::IsNullOrWhiteSpace($script:shareUrl)) { throw 'Start Phone Setup first.' }
+    return $script:shareUrl + 'android-bpsr-relay.json'
+}
+
+function Get-SfaImportUrl {
+    $profileUrl = Get-ProfileDownloadUrl
+    return 'sing-box://import-remote-profile?url=' + [Uri]::EscapeDataString($profileUrl) + '#' + [Uri]::EscapeDataString('BPSR Relay')
+}
+
 function Copy-ShareUrl {
-    if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Share to Phone first.' }
+    if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Phone Setup first.' }
     $script:shareProcess.Refresh()
-    if ($script:shareProcess.HasExited) { throw 'The temporary share page has expired. Start Share to Phone again.' }
-    [System.Windows.Forms.Clipboard]::SetText($script:shareUrl)
-    Add-Log 'Temporary phone URL copied to clipboard.'
+    if ($script:shareProcess.HasExited) { throw 'Phone setup expired. Start Phone Setup again.' }
+    [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
+    Add-Log 'SFA import link copied.'
 }
 
 function Show-ShareQr {
-    if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Share to Phone first.' }
+    if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Phone Setup first.' }
     $script:shareProcess.Refresh()
-    if ($script:shareProcess.HasExited) { throw 'The temporary share page has expired. Start Share to Phone again.' }
-    $qrUrl = 'https://quickchart.io/qr?size=360&margin=2&text=' + [Uri]::EscapeDataString($script:shareUrl)
+    if ($script:shareProcess.HasExited) { throw 'Phone setup expired. Start Phone Setup again.' }
+    $sfaImportUrl = Get-SfaImportUrl
+    $qrUrl = 'https://quickchart.io/qr?size=420&margin=2&text=' + [Uri]::EscapeDataString($sfaImportUrl)
     Start-Process $qrUrl | Out-Null
-    Add-Log 'Opened optional QR rendering in the default browser. Copy URL remains available if you prefer not to use the online QR renderer.'
+    Add-Log 'Opened SFA-ready QR. On Android: SFA > + > Scan QR Code.'
 }
 
 function Open-ProfileFolder {

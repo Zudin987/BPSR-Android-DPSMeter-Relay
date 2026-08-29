@@ -2,29 +2,35 @@
 
 A simple Windows helper for using **Blue Protocol: Star Resonance on Android** with a compatible packet-based DPS meter.
 
-Current test build: **v1.0.0-rc.11**
+Current test build: **v1.0.0-rc.13**
 
 ## Quick start
 
-Download the release ZIP, extract it, then open:
+Download the release ZIP, extract it, then open `BPSR Relay Manager.exe`.
 
-```text
-BPSR Relay Manager.exe
-```
+### First time - Android baby steps
 
-On the **Home** tab, follow these steps:
+You need **SFA (sing-box for Android)** on the phone. No root, Shizuku, Termux, ADB, or packet-capture APK is needed.
 
-1. **Prepare Relay** — sets up this PC.
-2. **Allow Firewall** — lets your phone connect to this PC.
-3. **Send to Phone** — import the profile in SFA on Android. Select **BPSR only**.
-4. **DPS Meter** — set your compatible meter to **StarSEA**.
-5. **Start Relay** — then open BPSR and play.
+1. Install **SFA** on Android.
+2. Put phone and PC on the **same Wi-Fi/LAN**.
+3. PC: **Prepare Relay**.
+4. PC: **Allow Firewall**.
+5. PC: **Start Phone Setup**. An SFA-ready QR opens.
+6. Phone: open **SFA**.
+7. Tap **+ → Scan QR Code**.
+8. Scan the QR on the PC.
+9. Confirm **BPSR Relay**.
+10. SFA **Settings → Per-app proxy → BPSR only**.
+11. Start SFA and allow Android VPN permission if asked.
+12. PC DPS meter target: **StarSEA**.
+13. PC: **Start Relay**, then open BPSR.
 
-Next time is much easier:
+QR is recommended. The temporary phone page also offers **Open in SFA** and **Download SFA profile** as fallback methods.
 
-```text
-Open BPSR Relay Manager.exe -> Start Relay -> Play
-```
+### Next time
+
+`PC: Start Relay → Phone: Start SFA → Open BPSR`
 
 The app has only three pages:
 
@@ -32,14 +38,14 @@ The app has only three pages:
 - **Details** — logs, report, recovery tools.
 - **Help** — short instructions and common fixes.
 
-RC.11 was rebuilt from real Windows screenshots after RC.10 exposed text clipping and wasted space. The current Home, Details, and Help layouts were also rendered to Windows preview images during UI audit so visual problems could be caught in addition to control-bound checks.
+RC.13 keeps the screenshot-audited UI and adds direct SFA QR import plus Android baby-step guidance.
 
 ## If something is red
 
 Read **What to do next** on the Home page. The app uses short messages such as:
 
 - **Needs setup** → click **Prepare Relay**.
-- **Phone Profile: Missing** → click **Prepare Relay**, then **Send to Phone**.
+- **Phone Profile: Missing** → click **Prepare Relay**, then **Start Phone Setup**.
 - **Firewall: Not set** → click **Allow Firewall**.
 - **Old relay found** → close old relay apps or restart the PC.
 
@@ -100,6 +106,12 @@ The user-facing `BPSR Relay Manager.exe` is only a small launcher. It is **not**
 
 ## SFA / Android notes
 
+**Show SFA QR** uses the official remote-profile import form:
+
+`sing-box://import-remote-profile?url=<temporary-profile-url>#BPSR%20Relay`
+
+SFA downloads the profile from the temporary PC setup server during import. Create a new phone setup link if you need to re-import later.
+
 For the v1.0 line, use an SFA/sing-box **1.13.x** compatible Android client. The project-tested reference core is **sing-box v1.13.19**.
 
 The generated Android profile does not use `strict_route`. SFA's Android app **does not implement that TUN option**, so the relay uses the supported PC relay-IP exclusion instead.
@@ -145,7 +157,7 @@ Runtime files stay local under `.runtime/`. Generated phone files stay under `ou
 
 ## Release status
 
-RC.11 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.
+RC.13 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.
 
 Before stable release, a real Android + Windows test still needs to confirm:
 
