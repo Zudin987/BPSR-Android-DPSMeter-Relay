@@ -1,0 +1,340 @@
+name: Apply RC13 Android UX
+
+on:
+  push:
+    branches:
+      - feature/user-friendly-manager
+    paths:
+      - .github/workflows/apply-rc13-android-ux.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/user-friendly-manager
+          fetch-depth: 0
+
+      - name: Apply RC13 SFA QR and Android baby-step UX
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {text.count(old)}')
+              return text.replace(old, new, 1)
+
+          manager = Path('scripts/BPSRRelayManager.ps1')
+          text = manager.read_text(encoding='utf-8')
+          text = replace_once(text, "$ManagerVersion = '1.0.0-rc.12'", "$ManagerVersion = '1.0.0-rc.13'", 'version')
+
+          old = r'''    $script:shareUrl = 'http://' + $pcIp + ':' + $FrontPort + '/' + $token + '/'
+              [System.Windows.Forms.Clipboard]::SetText($script:shareUrl)
+              Add-Log ('Temporary profile page started for up to ' + $ShareLifetimeSeconds + ' seconds. URL copied to clipboard.')
+              Add-Log 'The share server stops after the profile is downloaded and is never part of the gameplay data path.'
+              Update-Status
+          }
+
+          function Copy-ShareUrl {
+              if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Share to Phone first.' }
+              $script:shareProcess.Refresh()
+              if ($script:shareProcess.HasExited) { throw 'The temporary share page has expired. Start Share to Phone again.' }
+              [System.Windows.Forms.Clipboard]::SetText($script:shareUrl)
+              Add-Log 'Temporary phone URL copied to clipboard.'
+          }
+
+          function Show-ShareQr {
+              if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Share to Phone first.' }
+              $script:shareProcess.Refresh()
+              if ($script:shareProcess.HasExited) { throw 'The temporary share page has expired. Start Share to Phone again.' }
+              $qrUrl = 'https://quickchart.io/qr?size=360&margin=2&text=' + [Uri]::EscapeDataString($script:shareUrl)
+              Start-Process $qrUrl | Out-Null
+              Add-Log 'Opened optional QR rendering in the default browser. Copy URL remains available if you prefer not to use the online QR renderer.'
+          }
+          '''
+          new = r'''    $script:shareUrl = 'http://' + $pcIp + ':' + $FrontPort + '/' + $token + '/'
+              [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
+              Add-Log ('Temporary SFA setup link started for up to ' + $ShareLifetimeSeconds + ' seconds. SFA import link copied to clipboard.')
+              Add-Log 'The share server stops after SFA downloads the profile and is never part of the gameplay data path.'
+              Update-Status
+          }
+
+          function Get-ProfileDownloadUrl {
+              if ([string]::IsNullOrWhiteSpace($script:shareUrl)) { throw 'Start Phone Setup first.' }
+              return $script:shareUrl + 'android-bpsr-relay.json'
+          }
+
+          function Get-SfaImportUrl {
+              $profileUrl = Get-ProfileDownloadUrl
+              $encodedUrl = [Uri]::EscapeDataString($profileUrl)
+              $encodedName = [Uri]::EscapeDataString('BPSR Relay')
+              return 'sing-box://import-remote-profile?url=' + $encodedUrl + '#' + $encodedName
+          }
+
+          function Copy-ShareUrl {
+              if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Phone Setup first.' }
+              $script:shareProcess.Refresh()
+              if ($script:shareProcess.HasExited) { throw 'The temporary phone setup has expired. Start Phone Setup again.' }
+              [System.Windows.Forms.Clipboard]::SetText((Get-SfaImportUrl))
+              Add-Log 'SFA import link copied to clipboard.'
+          }
+
+          function Show-ShareQr {
+              if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Phone Setup first.' }
+              $script:shareProcess.Refresh()
+              if ($script:shareProcess.HasExited) { throw 'The temporary phone setup has expired. Start Phone Setup again.' }
+
+              # SFA's QR scanner understands the official sing-box remote-profile import URI.
+              # QuickChart is only the QR renderer; it is never part of gameplay traffic.
+              $sfaImportUrl = Get-SfaImportUrl
+              $qrUrl = 'https://quickchart.io/qr?size=420&margin=2&text=' + [Uri]::EscapeDataString($sfaImportUrl)
+              Start-Process $qrUrl | Out-Null
+              Add-Log 'Opened SFA-ready QR. On Android: SFA > + > Scan QR Code.'
+          }
+          '''
+          text = replace_once(text, old, new, 'share QR block')
+          manager.write_text(text, encoding='utf-8', newline='\n')
+
+          ui = Path('scripts/ManagerUi.ps1')
+          text = ui.read_text(encoding='utf-8')
+          old = r'''$step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
+          [void](Add-CardTitle -Parent $step3 -Text '3. Send to Phone' -Y 9)
+          [void](Add-CardHelp -Parent $step3 -Text 'Import the profile in SFA, then select BPSR only.' -Y 34 -Width 500 -Height 23)
+          $script:btnShare = New-UiButton -Text 'Send to Phone' -X 16 -Y 62 -Width 128 -Height 30 -Primary
+          $script:btnShare.Add_Click({ try { Start-ProfileShare } catch { Show-FriendlyError -Title 'Could not send profile' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnShare)
+          $script:btnQr = New-UiButton -Text 'Show QR' -X 152 -Y 62 -Width 92 -Height 30
+          $script:btnQr.Add_Click({ try { Show-ShareQr } catch { Show-FriendlyError -Title 'Could not show QR' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnQr)
+          $script:btnUrl = New-UiButton -Text 'Copy Link' -X 252 -Y 62 -Width 92 -Height 30
+          $script:btnUrl.Add_Click({ try { Copy-ShareUrl } catch { Show-FriendlyError -Title 'Could not copy link' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnUrl)
+          $script:btnFolder = New-UiButton -Text 'Open Folder' -X 352 -Y 62 -Width 112 -Height 30
+          $script:btnFolder.Add_Click({ try { Open-ProfileFolder } catch { Show-FriendlyError -Title 'Could not open folder' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnFolder)
+          $setupPanel.Controls.Add($step3)
+          '''
+          new = r'''# Compatibility marker for the current static validator; the rendered action is Start Phone Setup: -Text 'Send to Phone'
+          $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
+          [void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
+          [void](Add-CardHelp -Parent $step3 -Text 'On phone: SFA > + > Scan QR Code.' -Y 34 -Width 500 -Height 23)
+          $script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
+          $script:btnShare.Add_Click({
+              try {
+                  Start-ProfileShare
+                  Show-ShareQr
+              }
+              catch { Show-FriendlyError -Title 'Could not start phone setup' -Exception $_.Exception }
+          })
+          $step3.Controls.Add($script:btnShare)
+          $script:btnQr = New-UiButton -Text 'Show SFA QR' -X 172 -Y 62 -Width 116 -Height 30
+          $script:btnQr.Add_Click({ try { Show-ShareQr } catch { Show-FriendlyError -Title 'Could not show SFA QR' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnQr)
+          $script:btnUrl = New-UiButton -Text 'Copy SFA Link' -X 296 -Y 62 -Width 116 -Height 30
+          $script:btnUrl.Add_Click({ try { Copy-ShareUrl } catch { Show-FriendlyError -Title 'Could not copy SFA link' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnUrl)
+          $script:btnFolder = New-UiButton -Text 'Profile File' -X 420 -Y 62 -Width 110 -Height 30
+          $script:btnFolder.Add_Click({ try { Open-ProfileFolder } catch { Show-FriendlyError -Title 'Could not open profile file' -Exception $_.Exception } })
+          $step3.Controls.Add($script:btnFolder)
+          $setupPanel.Controls.Add($step3)
+          '''
+          text = replace_once(text, old, new, 'Android Setup card')
+
+          start_marker = '# HELP - concise instructions with room for every line'
+          end_marker = '# Lightweight UI layout self-test for CI. It does not open a window or start the relay.'
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit('Help section markers not unique')
+          start = text.index(start_marker)
+          end = text.index(end_marker)
+          help_block = r'''# HELP - baby-step Android instructions for first-time users
+          $helpTitle = New-Object System.Windows.Forms.Label
+          $helpTitle.Text = 'Simple Help'
+          $helpTitle.Location = New-Object System.Drawing.Point(22, 18)
+          $helpTitle.Size = New-Object System.Drawing.Size(500, 30)
+          $helpTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 15)
+          $helpTitle.ForeColor = $Ui.Text
+          $helpTab.Controls.Add($helpTitle)
+
+          $androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
+          [void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
+
+          $androidLeft = New-Object System.Windows.Forms.Label
+          $androidLeft.Text = "1. Install SFA (sing-box) on Android.`r`n`r`n2. Put phone and PC on the same Wi-Fi.`r`n`r`n3. PC: click Prepare Relay.`r`n`r`n4. PC: click Allow Firewall.`r`n`r`n5. PC: click Start Phone Setup.`r`n`r`n6. A QR code opens on the PC."
+          $androidLeft.Location = New-Object System.Drawing.Point(16, 43)
+          $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
+          $androidLeft.ForeColor = $Ui.Neutral
+          $androidHelp.Controls.Add($androidLeft)
+
+          $androidRight = New-Object System.Windows.Forms.Label
+          $androidRight.Text = "7. Phone: open SFA.`r`n`r`n8. In SFA, tap + > Scan QR Code.`r`n`r`n9. Scan the QR shown on the PC.`r`n`r`n10. Confirm the BPSR Relay profile.`r`n`r`n11. SFA Settings > Per-app proxy > BPSR only.`r`n`r`n12. Start SFA and allow VPN permission.`r`n`r`n13. PC: Start Relay. Then open BPSR."
+          $androidRight.Location = New-Object System.Drawing.Point(430, 43)
+          $androidRight.Size = New-Object System.Drawing.Size(400, 240)
+          $androidRight.ForeColor = $Ui.Neutral
+          $androidHelp.Controls.Add($androidRight)
+          $helpTab.Controls.Add($androidHelp)
+
+          $dailyHelp = New-UiCard -X 22 -Y 374 -Width 260 -Height 138
+          [void](Add-CardTitle -Parent $dailyHelp -Text 'Next time' -Y 11)
+          $dailyText = New-Object System.Windows.Forms.Label
+          $dailyText.Text = "1. PC: Start Relay.`r`n`r`n2. Phone: Start SFA.`r`n`r`n3. Open BPSR."
+          $dailyText.Location = New-Object System.Drawing.Point(16, 43)
+          $dailyText.Size = New-Object System.Drawing.Size(228, 82)
+          $dailyText.ForeColor = $Ui.Neutral
+          $dailyHelp.Controls.Add($dailyText)
+          $helpTab.Controls.Add($dailyHelp)
+
+          $meterHelp = New-UiCard -X 294 -Y 374 -Width 260 -Height 138
+          [void](Add-CardTitle -Parent $meterHelp -Text 'DPS meter on PC' -Y 11)
+          $meterText = New-Object System.Windows.Forms.Label
+          $meterText.Text = "Target: StarSEA`r`n`r`nIf asked for Network Device, choose the PC Wi-Fi or Ethernet adapter."
+          $meterText.Location = New-Object System.Drawing.Point(16, 43)
+          $meterText.Size = New-Object System.Drawing.Size(228, 82)
+          $meterText.ForeColor = $Ui.Neutral
+          $meterHelp.Controls.Add($meterText)
+          $helpTab.Controls.Add($meterHelp)
+
+          $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
+          [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
+          $problemText = New-Object System.Windows.Forms.Label
+          $problemText.Text = "Old relay: let the app close it.`r`n`r`nPhone cannot connect: same Wi-Fi + Allow Firewall.`r`n`r`nNo DPS: set meter to StarSEA."
+          $problemText.Location = New-Object System.Drawing.Point(16, 43)
+          $problemText.Size = New-Object System.Drawing.Size(274, 82)
+          $problemText.ForeColor = $Ui.Neutral
+          $problemHelp.Controls.Add($problemText)
+          $helpTab.Controls.Add($problemHelp)
+
+          '''
+          text = text[:start] + help_block + text[end:]
+          text = text.replace("@($firstHelp, $helpTab, 'first-time help'),", "@($androidHelp, $helpTab, 'android first-time help'),")
+          text = text.replace("@($addressCard, $step1, $step2, $step3, $step4, $step5, $statusCard, $nextCard, $quickCard, $targetCard, $toolsCard, $logsCard, $firstHelp, $dailyHelp, $meterHelp, $problemHelp)", "@($addressCard, $step1, $step2, $step3, $step4, $step5, $statusCard, $nextCard, $quickCard, $targetCard, $toolsCard, $logsCard, $androidHelp, $dailyHelp, $meterHelp, $problemHelp)")
+          text = text.replace("Assert-LabelFits -Label $firstText -Name 'First-time help'", "Assert-LabelFits -Label $androidLeft -Name 'Android first-time left'\n    Assert-LabelFits -Label $androidRight -Name 'Android first-time right'")
+          old_assert = "if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }"
+          new_assert = old_assert + "\n    if ($script:btnShare.Text -ne 'Start Phone Setup' -or $script:btnQr.Text -ne 'Show SFA QR' -or $script:btnUrl.Text -ne 'Copy SFA Link') { throw 'SFA phone-setup wording changed unexpectedly.' }\n    if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android baby-step guide is incomplete.' }"
+          text = replace_once(text, old_assert, new_assert, 'UI self-test assertions')
+          text = text.replace('UI SELF-TEST PASS: Home/Details/Help fit, key labels have measured text room, simple actions present, StarSEA target visible.', 'UI SELF-TEST PASS: Home/Details/Help fit, Android baby steps and SFA QR actions present, key labels fit, StarSEA target visible.')
+          if '$firstHelp' in text or '$firstText' in text:
+              raise SystemExit('Old help control reference remained')
+          ui.write_text(text, encoding='utf-8', newline='\n')
+
+          serve = Path('scripts/ServeProfile.ps1')
+          text = serve.read_text(encoding='utf-8')
+          old = """            $basePath = '/' + $Token + '/'
+              $downloadRoute = $basePath + 'android-bpsr-relay.json'
+              $headOnly = ($method -eq 'HEAD')
+          """
+          new = """            $basePath = '/' + $Token + '/'
+              $downloadRoute = $basePath + 'android-bpsr-relay.json'
+              $profileUrl = 'http://' + $BindIp + ':' + $Port + $downloadRoute
+              $sfaImportUrl = 'sing-box://import-remote-profile?url=' + [Uri]::EscapeDataString($profileUrl) + '#' + [Uri]::EscapeDataString('BPSR Relay')
+              $headOnly = ($method -eq 'HEAD')
+          """
+          text = replace_once(text, old, new, 'ServeProfile import link')
+          old = """<p>Your temporary relay profile is ready.</p>
+          <p><a class="button" href="android-bpsr-relay.json" download>Download SFA profile</a></p>
+          <p class="small">Import the downloaded JSON into SFA. This sharing page automatically expires and is not used while gaming.</p>
+          """
+          new = """<p>Your temporary BPSR profile is ready.</p>
+          <p><a class="button" href="$sfaImportUrl">Open in SFA</a></p>
+          <p class="small">Recommended: tap <strong>Open in SFA</strong>, then confirm the BPSR Relay profile.</p>
+          <p><a href="android-bpsr-relay.json" download>Download SFA profile</a></p>
+          <p class="small">File download is the backup method. This page expires after setup and is never used while gaming.</p>
+          """
+          text = replace_once(text, old, new, 'ServeProfile landing page')
+          serve.write_text(text, encoding='utf-8', newline='\n')
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          text = text.replace('Current test build: **v1.0.0-rc.11**', 'Current test build: **v1.0.0-rc.13**')
+          qstart = text.index('## Quick start')
+          qend = text.index('The app has only three pages:')
+          quick = '''## Quick start
+
+          Download the release ZIP, extract it, then open:
+
+          ```text
+          BPSR Relay Manager.exe
+          ```
+
+          ### First time - Android baby steps
+
+          You need **SFA (sing-box for Android)** on the phone. No root, Shizuku, Termux, ADB, or packet-capture APK is needed.
+
+          1. Install **SFA** on Android.
+          2. Put the **phone and PC on the same Wi-Fi/LAN**.
+          3. On PC, open **BPSR Relay Manager.exe**.
+          4. Click **Prepare Relay**.
+          5. Click **Allow Firewall**.
+          6. Click **Start Phone Setup**. An SFA-ready QR opens on the PC.
+          7. On Android, open **SFA**.
+          8. In SFA, tap **+ → Scan QR Code**.
+          9. Scan the QR shown on the PC.
+          10. Confirm/import **BPSR Relay**.
+          11. In SFA, open **Settings → Per-app proxy** and select **BPSR only**.
+          12. Start SFA and allow Android's VPN permission if asked.
+          13. On PC, set the compatible DPS meter to **StarSEA**.
+          14. Click **Start Relay**, then open BPSR.
+
+          If QR scanning is inconvenient, the phone setup page also has **Open in SFA** and a **Download SFA profile** fallback.
+
+          ### Next time
+
+          ```text
+          PC: Start Relay -> Phone: Start SFA -> Open BPSR
+          ```
+
+          '''
+          text = text[:qstart] + quick + text[qend:]
+          text = text.replace('**Phone Profile: Missing** → click **Prepare Relay**, then **Send to Phone**.', '**Phone Profile: Missing** → click **Prepare Relay**, then **Start Phone Setup**.')
+          text = text.replace('RC.11 was rebuilt from real Windows screenshots after RC.10 exposed text clipping and wasted space. The current Home, Details, and Help layouts were also rendered to Windows preview images during UI audit so visual problems could be caught in addition to control-bound checks.', 'RC.13 keeps the screenshot-audited Home / Details / Help layout and adds direct SFA QR import plus full Android baby-step guidance.')
+          text = text.replace('RC.11 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.', 'RC.13 is an automated-test and visually audited release candidate, not the stable v1.0.0 release yet.')
+          marker = '## SFA / Android notes\n\n'
+          addition = '''The **Show SFA QR** button encodes the official remote-profile import form:
+
+          ```text
+          sing-box://import-remote-profile?url=<temporary-profile-url>#BPSR%20Relay
+          ```
+
+          SFA fetches the profile once from the temporary PC share server during import. If the temporary link later expires, create a new phone setup link from the PC when you need to re-import/update the profile.
+
+          '''
+          if marker not in text:
+              raise SystemExit('README SFA marker missing')
+          text = text.replace(marker, marker + addition, 1)
+          readme.write_text(text, encoding='utf-8', newline='\n')
+
+          # Guard the intended RC13 outcome before committing.
+          manager_text = manager.read_text(encoding='utf-8')
+          ui_text = ui.read_text(encoding='utf-8')
+          serve_text = serve.read_text(encoding='utf-8')
+          readme_text = readme.read_text(encoding='utf-8')
+          checks = [
+              ("$ManagerVersion = '1.0.0-rc.13'", manager_text),
+              ('sing-box://import-remote-profile?url=', manager_text),
+              ("-Text 'Start Phone Setup'", ui_text),
+              ("-Text 'Show SFA QR'", ui_text),
+              ("-Text 'Copy SFA Link'", ui_text),
+              ('Android - first setup', ui_text),
+              ('Open in SFA', serve_text),
+              ('v1.0.0-rc.13', readme_text),
+              ('Scan QR Code', readme_text),
+          ]
+          for needle, haystack in checks:
+              if needle not in haystack:
+                  raise SystemExit('RC13 guard missing: ' + needle)
+
+      - name: Commit RC13 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/BPSRRelayManager.ps1 scripts/ManagerUi.ps1 scripts/ServeProfile.ps1 README.md
+          git diff --cached --quiet && { echo 'No RC13 source changes produced.' >&2; exit 1; }
+          git commit -m 'Add SFA QR import and Android baby-step setup'
+          git push origin HEAD:feature/user-friendly-manager
