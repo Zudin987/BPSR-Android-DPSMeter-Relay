@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.0-rc.4'
+$ManagerVersion = '1.0.0-rc.5'
 $TestedSingBoxVersion = 'v1.13.19'
 $IngressMethod = '2022-blake3-aes-128-gcm'
 $FrontPort = 10902
@@ -669,7 +669,7 @@ function Test-FirewallReady {
     try {
         $rules = @(Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction Stop | Where-Object { $_.Enabled -eq 'True' })
         foreach ($rule in $rules) {
-            if ([string]$rule.Profile -notmatch 'Private|Domain') { continue }
+            if ([string]$rule.Profile -notmatch 'Private') { continue }
             $port = $rule | Get-NetFirewallPortFilter
             $addr = $rule | Get-NetFirewallAddressFilter
             if ([string]$port.Protocol -eq 'TCP' -and [string]$port.LocalPort -eq [string]$FrontPort) {
@@ -953,11 +953,11 @@ function Get-PreflightChecks {
     }
 
     if (Test-FirewallReady -PcIp $PcIp) { Add-CheckLocal 'Firewall' 'OK' 'LAN-only Private-profile rule found.' }
-    else { Add-CheckLocal 'Firewall' 'WARN' 'Expected narrow manager firewall rule was not found for this IP.' }
+    else { Add-CheckLocal 'Firewall' 'WARN' 'Expected narrow Private-profile manager firewall rule was not found for this IP.' }
 
     $category = Get-NetworkCategoryForIp -Address $PcIp
-    if ($category -eq 'Private' -or $category -eq 'DomainAuthenticated') { Add-CheckLocal 'Windows network profile' 'OK' $category }
-    else { Add-CheckLocal 'Windows network profile' 'WARN' ('Current category: ' + $category + '. The manager firewall rule is Private-only.') }
+    if ($category -eq 'Private') { Add-CheckLocal 'Windows network profile' 'OK' $category }
+    else { Add-CheckLocal 'Windows network profile' 'WARN' ('Current category: ' + $category + '. The manager firewall rule is intentionally Private-only.') }
 
     return @($checks)
 }
