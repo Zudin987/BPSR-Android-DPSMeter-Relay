@@ -132,6 +132,12 @@ jobs:
           $sha = Get-ChildItem '.\dist' -Filter '*.sha256' -File | Select-Object -First 1
           if (-not $zip -or -not $sha) { throw 'Release assets are missing.' }
 
+          $expectedZip = 'BPSR-Android-DPSMeter-Relay.zip'
+          $expectedSha = 'BPSR-Android-DPSMeter-Relay.zip.sha256'
+          if ($zip.Name -ne $expectedZip -or $sha.Name -ne $expectedSha) {
+            throw ('Release assets must use permanent website-safe names. Found: ' + $zip.Name + ', ' + $sha.Name)
+          }
+
           cmd.exe /d /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
           $releaseExists = ($LASTEXITCODE -eq 0)
           if ($releaseExists) {
@@ -147,3 +153,4 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           Write-Host ('Published ' + $tag + ' from commit ' + $env:GITHUB_SHA)
+          Write-Host ('Permanent direct download: https://github.com/${{ github.repository }}/releases/latest/download/' + $expectedZip)
