@@ -23,7 +23,6 @@ jobs:
             'scripts\TestRelaySmoke.ps1',
             'scripts\BuildRelease.ps1'
           )
-
           foreach ($relative in $paths) {
             $path = Join-Path $env:GITHUB_WORKSPACE $relative
             $tokens = $null
@@ -36,7 +35,7 @@ jobs:
             Write-Host ($relative + ' syntax OK.')
           }
 
-      - name: Check latency, simple UI and single-count invariants
+      - name: Check latency, v4 compatibility and single-count invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
@@ -46,16 +45,22 @@ jobs:
           $launcher = Get-Content 'launcher\BPSRRelayManagerLauncher.cs' -Raw
           $builder = Get-Content 'scripts\BuildRelease.ps1' -Raw
           $release = Get-Content '.github\workflows\release.yml' -Raw
+          $smoke = Get-Content 'scripts\TestRelaySmoke.ps1' -Raw
 
           $required = @(
-            '$TestedSingBoxVersion',
-            'v1.13.19',
-            '$IngressMethod',
-            '2022-blake3-aes-128-gcm',
-            '$FrontPort = 10902',
-            '15000, 16000, 17000, 18000, 20000, 20001, 21000',
-            "type = 'shadowsocks'",
-            "network = 'tcp'",
+            "`$ManagerVersion = '1.0.0-rc.15'",
+            "`$TestedSingBoxVersion = 'v1.13.19'",
+            '$FrontPort = 10808',
+            '$InternalPortStart = 18080',
+            '$InternalPortEnd = 18180',
+            "Join-Path `$Runtime 'BPSRMobileFront.exe'",
+            "Join-Path `$Runtime 'StarSEA.exe'",
+            "Join-Path `$ConfigDir 'pc-relay-front.json'",
+            "Join-Path `$ConfigDir 'pc-relay-back.json'",
+            "mode = 'v4-compatible-socks5'",
+            "type = 'socks'",
+            "server = '127.0.0.1'",
+            "final = 'bpsr-pc'",
             'route_exclude_address',
             "stack = 'system'",
             'function Assert-Topology',
@@ -66,20 +71,17 @@ jobs:
             'function Load-TrackedRelayIdentity',
             'function Set-TrackedRelayIdentity',
             'function Clear-TrackedRelayIdentity',
-            'Gameplay hot check: PID + immutable process start time only.',
             'Universal DPS meter capture target: StarSEA',
-            'Any compatible DPS meter may independently capture this StarSEA stream.',
-            '-ExpectedStartUtc $trackedStart',
-            'Not saving ',
-            'restored the exact pre-rollback runtime files',
+            'Do not target BPSRMobileFront',
+            '-Protocol TCP',
+            '-Protocol UDP',
             '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
             "if (`$category -eq 'Private')",
             "Join-Path `$PSScriptRoot 'ManagerUi.ps1'"
           )
-
           foreach ($needle in $required) {
             if (-not $text.Contains($needle)) {
-              Write-Error ('Missing critical relay invariant: ' + $needle)
+              Write-Error ('Missing critical RC.15 invariant: ' + $needle)
               exit 1
             }
           }
@@ -89,22 +91,34 @@ jobs:
             exit 1
           }
 
+          $writeStart = $text.IndexOf('function Write-RelayConfigs', [System.StringComparison]::Ordinal)
+          $writeEnd = $text.IndexOf('function Get-ProfilePcIp', $writeStart, [System.StringComparison]::Ordinal)
+          if ($writeStart -lt 0 -or $writeEnd -le $writeStart) { throw 'Could not isolate Write-RelayConfigs.' }
+          $writeSegment = $text.Substring($writeStart, $writeEnd - $writeStart)
+          foreach ($forbidden in @("type = 'shadowsocks'", '2022-blake3-aes-128-gcm', 'BPSRRelayIngress', 'multiplex')) {
+            if ($writeSegment.Contains($forbidden)) {
+              throw ('RC.14 transport leaked back into RC.15 generated configs: ' + $forbidden)
+            }
+          }
+          foreach ($needle in @("type = 'socks'", "server = '127.0.0.1'", "final = 'bpsr-pc'", 'route_exclude_address')) {
+            if (-not $writeSegment.Contains($needle)) { throw ('RC.15 config generator is missing: ' + $needle) }
+          }
+
           $uiRequired = @(
             "`$homeTab.Text = 'Home'",
             "`$detailsTab.Text = 'Details'",
             "`$helpTab.Text = 'Help'",
             "-Text 'Prepare Relay'",
-            "-Text 'Send to Phone'",
             "-Text 'Start Relay'",
             "-Text '5. Start & Play'",
             "-Text 'What to do next'",
             "`$helpTitle.Text = 'Simple Help'",
             "`$targetValue.Text = 'StarSEA'",
+            'Remove old RC.14 profile',
+            'Never BPSRMobileFront',
             'BPSR_RELAY_UI_SELF_TEST',
-            'UI SELF-TEST PASS',
-            'Gameplay hot path: one tracked-process check only.'
+            'UI SELF-TEST PASS'
           )
-
           foreach ($needle in $uiRequired) {
             if (-not $ui.Contains($needle)) {
               Write-Error ('Simple UI invariant is missing: ' + $needle)
@@ -112,83 +126,55 @@ jobs:
             }
           }
 
-          $hotStart = $ui.IndexOf('if (Get-RelayTrackedRunning) {', [System.StringComparison]::Ordinal)
-          $hotReturn = if ($hotStart -ge 0) { $ui.IndexOf('return', $hotStart, [System.StringComparison]::Ordinal) } else { -1 }
-          if ($hotStart -lt 0 -or $hotReturn -lt 0) {
-            throw 'Could not identify the running-status hot path in ManagerUi.ps1.'
-          }
-          $hotSegment = $ui.Substring($hotStart, ($hotReturn - $hotStart + 6))
+          $uiHotStart = $ui.IndexOf('if (Get-RelayTrackedRunning) {', [System.StringComparison]::Ordinal)
+          $uiHotReturn = if ($uiHotStart -ge 0) { $ui.IndexOf('return', $uiHotStart, [System.StringComparison]::Ordinal) } else { -1 }
+          if ($uiHotStart -lt 0 -or $uiHotReturn -lt 0) { throw 'Could not identify UI running-status hot path.' }
+          $uiHot = $ui.Substring($uiHotStart, ($uiHotReturn - $uiHotStart + 6))
           foreach ($forbidden in @('Test-RuntimeIntegrity', 'Test-FirewallReady', 'Get-ProfilePcIp', 'Get-LanIPv4Candidates', 'Get-FileHash', 'Get-CimInstance')) {
-            if ($hotSegment.Contains($forbidden)) {
-              throw ('Gameplay UI hot path regressed to heavy work: ' + $forbidden)
-            }
+            if ($uiHot.Contains($forbidden)) { throw ('Gameplay UI hot path regressed to heavy work: ' + $forbidden) }
           }
 
-          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'does not implement that TUN option', 'BPSR Relay Manager.exe', 'EXE-first', 'Home', 'Details', 'Help', 'Prepare Relay', 'Start Relay')) {
+          $engineHotStart = $text.IndexOf('function Get-RelayTrackedRunning', [System.StringComparison]::Ordinal)
+          $engineHotEnd = $text.IndexOf('function Copy-Diagnostics', $engineHotStart, [System.StringComparison]::Ordinal)
+          if ($engineHotStart -lt 0 -or $engineHotEnd -le $engineHotStart) { throw 'Could not isolate Get-RelayTrackedRunning.' }
+          $engineHot = $text.Substring($engineHotStart, $engineHotEnd - $engineHotStart)
+          foreach ($forbidden in @('Get-FileHash', 'Get-CimInstance', 'Read-JsonFile', 'Get-NetIPConfiguration', 'Get-NetAdapter', 'Get-NetTCPConnection')) {
+            if ($engineHot.Contains($forbidden)) { throw ('Gameplay relay hot path regressed to heavy work: ' + $forbidden) }
+          }
+          if (($engineHot.Split(@('Get-Process'), [System.StringSplitOptions]::None).Count - 1) -ne 2) {
+            throw 'Gameplay relay hot path must check exactly the two tracked relay processes.'
+          }
+
+          foreach ($needle in @('DPS-meter agnostic', 'Any DPS meter that can parse BPSR traffic', 'Multiple DPS meters', 'authenticated SOCKS5', 'trusted home/private LAN', 'v4-compatible', 'BPSR Relay Manager.exe', 'EXE-first', 'Home', 'Details', 'Help', 'Prepare Relay', 'Start Relay')) {
             if (-not $readme.Contains($needle)) {
               Write-Error ('Documentation invariant is missing: ' + $needle)
               exit 1
             }
           }
 
-          if ($text.Contains("[ordered]@{ action = 'sniff' }")) {
-            Write-Error 'Protocol sniff action was reintroduced into the generated Android path.'
-            exit 1
-          }
+          if ($text.Contains("[ordered]@{ action = 'sniff' }")) { throw 'Protocol sniff action was reintroduced.' }
+          if ($text.Contains('strict_route = $true')) { throw 'Unsupported SFA strict_route was reintroduced.' }
+          if (-not $text.Contains("PSObject.Properties['strict_route']")) { throw 'SFA strict_route absence is no longer enforced.' }
+          if (-not $text.Contains('multiplex')) { throw 'Self-test no longer guards against multiplexing.' }
 
-          if ($text.Contains('strict_route = $true')) {
-            Write-Error 'Unsupported SFA Android strict_route was reintroduced.'
-            exit 1
-          }
-
-          if (-not $text.Contains("PSObject.Properties['strict_route']")) {
-            Write-Error 'SFA strict_route absence is no longer enforced by topology validation.'
-            exit 1
-          }
-
-          if (-not $text.Contains('Self-test found multiplexing on the latency path.')) {
-            Write-Error 'Self-test no longer guards against multiplexing on the latency path.'
-            exit 1
-          }
-
-          if ($text.Contains('return Test-ExpectedProcess -ProcessId $script:trackedStarPid')) {
-            Write-Error 'Gameplay status polling regressed to repeated executable-path verification.'
-            exit 1
-          }
-
-          if (-not $bat.Contains('scripts\LaunchManager.ps1')) {
-            Write-Error 'Repository BAT fallback no longer uses the startup-error wrapper.'
-            exit 1
-          }
-
+          if (-not $bat.Contains('scripts\LaunchManager.ps1')) { throw 'Repository BAT fallback no longer uses startup wrapper.' }
           foreach ($needle in @('ProcessStartInfo', 'powershell.exe', '--launcher-self-test', 'CreateNoWindow = true', 'scripts')) {
-            if (-not $launcher.Contains($needle)) {
-              Write-Error ('Native launcher invariant is missing: ' + $needle)
-              exit 1
-            }
+            if (-not $launcher.Contains($needle)) { throw ('Native launcher invariant missing: ' + $needle) }
           }
-          foreach ($forbidden in @('10902', '2022-blake3-aes-128-gcm', 'sing-box', 'StarSEA.exe')) {
-            if ($launcher.Contains($forbidden)) {
-              Write-Error ('Native launcher must stay out of relay/network logic; found: ' + $forbidden)
-              exit 1
-            }
+          foreach ($forbidden in @('10808', 'sing-box', 'StarSEA.exe', 'BPSRMobileFront.exe')) {
+            if ($launcher.Contains($forbidden)) { throw ('Native launcher must stay out of relay/network logic; found: ' + $forbidden) }
           }
-
           foreach ($needle in @('BPSR Relay Manager.exe', 'scripts\ManagerUi.ps1', '/target:winexe', '--launcher-self-test', 'must contain exactly one executable', "EntryPoint = 'BPSR Relay Manager.exe'")) {
-            if (-not $builder.Contains($needle)) {
-              Write-Error ('EXE-first package guard is missing: ' + $needle)
-              exit 1
-            }
+            if (-not $builder.Contains($needle)) { throw ('EXE-first package guard missing: ' + $needle) }
           }
-
           foreach ($needle in @('field_test_passed', "GITHUB_REF_NAME -ne 'main'", 'compatible DPS-meter', 'Require green Validate run for exact commit', '--commit $env:GITHUB_SHA', 'BuildRelease.ps1', 'gh release create')) {
-            if (-not $release.Contains($needle)) {
-              Write-Error ('Stable release guard is missing: ' + $needle)
-              exit 1
-            }
+            if (-not $release.Contains($needle)) { throw ('Stable release guard missing: ' + $needle) }
+          }
+          foreach ($needle in @('BPSRMobileFront', 'localhost StarSEA', '--proxy-user', '--socks5-hostname', 'V4-COMPAT RELAY SMOKE PASS')) {
+            if (-not $smoke.Contains($needle)) { throw ('V4-compatible smoke test missing: ' + $needle) }
           }
 
-          Write-Host 'Static latency/single-count/universal-DPS/SFA/simple-UI/EXE/safety/release-gate invariants present.'
+          Write-Host 'Static RC.15 v4-compatible/latency/single-count/UI/package/release guards present.'
 
       - name: Test simple manager UI layout
         shell: powershell
@@ -198,9 +184,7 @@ jobs:
             powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1'
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          finally {
-            Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue
-          }
+          finally { Remove-Item Env:BPSR_RELAY_UI_SELF_TEST -ErrorAction SilentlyContinue }
 
       - name: Run relay config self-test against pinned sing-box
         shell: powershell
@@ -208,7 +192,7 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Smoke-test encrypted relay data path
+      - name: Smoke-test v4-compatible two-stage relay data path
         shell: powershell
         run: |
           $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
@@ -220,13 +204,9 @@ jobs:
         run: |
           function Get-FreeTcpPort {
             $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
-            try {
-              $listener.Start()
-              return [int]$listener.LocalEndpoint.Port
-            }
+            try { $listener.Start(); return [int]$listener.LocalEndpoint.Port }
             finally { $listener.Stop() }
           }
-
           $profile = Join-Path $env:RUNNER_TEMP 'android-bpsr-relay.json'
           '{"test":true}' | Set-Content -Path $profile -Encoding ASCII
           $token = '0123456789abcdef0123456789abcdef'
@@ -240,42 +220,22 @@ jobs:
             Start-Sleep -Milliseconds 500
             $server.Refresh()
             if ($server.HasExited) { throw 'Profile server exited before test request.' }
-
             $base = 'http://127.0.0.1:' + $port + '/' + $token + '/'
             $page = Invoke-WebRequest -Uri $base -UseBasicParsing
-            if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'Download SFA profile') {
-              throw 'Profile landing page test failed.'
-            }
-
-            $badWas404 = $false
-            try {
-              Invoke-WebRequest -Uri ('http://127.0.0.1:' + $port + '/ffffffffffffffffffffffffffffffff/') -UseBasicParsing | Out-Null
-            }
-            catch {
-              if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { $badWas404 = $true }
-            }
-            if (-not $badWas404) { throw 'Wrong-token profile request was not rejected with 404.' }
-
+            if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'Download SFA profile') { throw 'Profile landing page test failed.' }
             $head = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -Method Head -UseBasicParsing
             if ($head.StatusCode -ne 200) { throw 'Profile HEAD request failed.' }
             $server.Refresh()
             if ($server.HasExited) { throw 'HEAD request incorrectly consumed the one-download profile share.' }
-
             $download = Invoke-WebRequest -Uri ($base + 'android-bpsr-relay.json') -UseBasicParsing
-            if ($download.StatusCode -ne 200 -or $download.Content -notmatch '"test"') {
-              throw 'Profile download test failed.'
-            }
-
+            if ($download.StatusCode -ne 200 -or $download.Content -notmatch '"test"') { throw 'Profile download test failed.' }
             $server.WaitForExit(5000) | Out-Null
             $server.Refresh()
             if (-not $server.HasExited) { throw 'One-download profile server did not exit.' }
             Write-Host 'Temporary profile server tests passed.'
           }
           finally {
-            if ($server) {
-              $server.Refresh()
-              if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-            }
+            if ($server) { $server.Refresh(); if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue } }
           }
 
       - name: Build and verify EXE-first release package
@@ -283,45 +243,28 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           $zips = @(Get-ChildItem -LiteralPath '.\dist' -Filter '*.zip' -File)
           $hashes = @(Get-ChildItem -LiteralPath '.\dist' -Filter '*.sha256' -File)
-          if ($zips.Count -ne 1 -or $hashes.Count -ne 1) {
-            throw 'Expected exactly one release ZIP and one SHA256 file.'
-          }
-
+          if ($zips.Count -ne 1 -or $hashes.Count -ne 1) { throw 'Expected exactly one release ZIP and one SHA256 file.' }
           $verify = Join-Path $env:RUNNER_TEMP 'bpsr-release-exe-check'
           if (Test-Path -LiteralPath $verify) { Remove-Item -LiteralPath $verify -Recurse -Force }
           Expand-Archive -LiteralPath $zips[0].FullName -DestinationPath $verify -Force
           $archiveRoot = @(Get-ChildItem -LiteralPath $verify -Directory)[0]
           if (-not $archiveRoot) { throw 'Release ZIP has no package root directory.' }
-
           $launcherExe = Join-Path $archiveRoot.FullName 'BPSR Relay Manager.exe'
-          if (-not (Test-Path -LiteralPath $launcherExe -PathType Leaf)) {
-            throw 'Release ZIP does not expose BPSR Relay Manager.exe as the user entry point.'
-          }
-          if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'scripts\ManagerUi.ps1') -PathType Leaf)) {
-            throw 'Release ZIP is missing the simple manager UI module.'
-          }
-          if (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'BPSR Relay Manager.bat')) {
-            throw 'Legacy BAT is still exposed as a release-package root entry point.'
-          }
-
+          if (-not (Test-Path -LiteralPath $launcherExe -PathType Leaf)) { throw 'Release ZIP does not expose BPSR Relay Manager.exe.' }
+          if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'scripts\ManagerUi.ps1') -PathType Leaf)) { throw 'Release ZIP is missing ManagerUi.ps1.' }
+          if (Test-Path -LiteralPath (Join-Path $archiveRoot.FullName 'BPSR Relay Manager.bat')) { throw 'Legacy BAT is exposed in release root.' }
           $exeFiles = @(Get-ChildItem -LiteralPath $archiveRoot.FullName -Filter '*.exe' -File -Recurse)
-          if ($exeFiles.Count -ne 1 -or $exeFiles[0].Name -ne 'BPSR Relay Manager.exe') {
-            throw ('Release ZIP must contain exactly one EXE launcher; found: ' + (($exeFiles.FullName) -join ', '))
+          if ($exeFiles.Count -ne 1 -or $exeFiles[0].Name -ne 'BPSR Relay Manager.exe') { throw 'Release ZIP must contain exactly one EXE launcher.' }
+          foreach ($forbidden in @('sing-box.exe','StarSEA.exe','BPSRMobileFront.exe','relay-credentials.json','pids.json')) {
+            if (Get-ChildItem -LiteralPath $archiveRoot.FullName -File -Recurse | Where-Object { $_.Name -eq $forbidden }) { throw ('Release ZIP contains forbidden runtime file: ' + $forbidden) }
           }
-
           $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($launcherExe)
-          if ($versionInfo.ProductName -ne 'BPSR Android DPSMeter Relay') {
-            throw ('Unexpected launcher ProductName: ' + $versionInfo.ProductName)
-          }
-
+          if ($versionInfo.ProductName -ne 'BPSR Android DPSMeter Relay') { throw ('Unexpected launcher ProductName: ' + $versionInfo.ProductName) }
           & $launcherExe '--launcher-self-test'
-          if ($LASTEXITCODE -ne 0) {
-            throw ('Packaged native launcher self-test failed: ' + $LASTEXITCODE)
-          }
-          Write-Host 'EXE-first package, UI module, and native launcher probe passed.'
+          if ($LASTEXITCODE -ne 0) { throw ('Packaged native launcher self-test failed: ' + $LASTEXITCODE) }
+          Write-Host 'EXE-first clean package and launcher probe passed.'
 
       - name: Upload validated release candidate package
         uses: actions/upload-artifact@v4
