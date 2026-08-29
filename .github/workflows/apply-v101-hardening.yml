@@ -25,8 +25,9 @@ jobs:
       - name: Apply patch and parse
         shell: powershell
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyV101HardeningV2.ps1'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $PcIp = '$PcIp'
+          $names = '$names'
+          . '.\scripts\ApplyV101HardeningV2.ps1'
           git diff --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
