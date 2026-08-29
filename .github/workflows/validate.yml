@@ -16,6 +16,7 @@ jobs:
         shell: powershell
         run: |
           $paths = @(
+            'scripts\LaunchManager.ps1',
             'scripts\BPSRRelayManager.ps1',
             'scripts\ServeProfile.ps1',
             'scripts\TestRelaySmoke.ps1'
@@ -37,6 +38,7 @@ jobs:
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
+          $bat = Get-Content 'BPSR Relay Manager.bat' -Raw
 
           $required = @(
             '$TestedSingBoxVersion',
@@ -58,7 +60,9 @@ jobs:
             '-ExpectedStartUtc $trackedStart',
             'Not saving ',
             'restored the exact pre-rollback runtime files',
-            'Gameplay hot path: once StarSEA is running, status polling must remain tiny.'
+            'Gameplay hot path: once StarSEA is running, status polling must remain tiny.',
+            '-RemoteAddress LocalSubnet -Profile Private -EdgeTraversalPolicy Block',
+            "if (`$category -eq 'Private')"
           )
 
           foreach ($needle in $required) {
@@ -70,6 +74,11 @@ jobs:
 
           if ($text.Contains("[ordered]@{ action = 'sniff' }")) {
             Write-Error 'Protocol sniff action was reintroduced into the generated Android path.'
+            exit 1
+          }
+
+          if (-not $bat.Contains('scripts\LaunchManager.ps1')) {
+            Write-Error 'Top-level BAT no longer uses the startup-error wrapper.'
             exit 1
           }
 
