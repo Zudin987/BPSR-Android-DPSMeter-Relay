@@ -1,5 +1,6 @@
 name: Promote v1 Source
 
+# One-shot stable source promotion helper.
 on:
   push:
     branches:
