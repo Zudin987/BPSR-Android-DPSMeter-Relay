@@ -18,6 +18,12 @@ Daily use is normally just:
 
 **PC Start Relay → Android Start SFA → Open BPSR**
 
+## Compatibility
+
+The relay is **DPS-meter agnostic**. **Any DPS meter that can parse BPSR traffic** from StarSEA can be used, and **Multiple DPS meters** may observe the same stream. The current design keeps the field-tested **v4-compatible** two-stage path with **authenticated SOCKS5** on a trusted home/private LAN.
+
+The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps normal setup on **Home**, troubleshooting on **Details**, and simple instructions on **Help**. The main actions include **Prepare Relay** and **Start Relay**.
+
 ## Important
 
 - Use only on a **trusted home/private LAN**.
@@ -26,7 +32,7 @@ Daily use is normally just:
 - Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
 - Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
 
-The relay does not modify BPSR game files and is DPS-meter agnostic as long as the meter can read the StarSEA traffic stream.
+The relay does not modify BPSR game files.
 
 **Unofficial community tool.** Not affiliated with BPSR, SFA, sing-box, or any DPS-meter project.
 
