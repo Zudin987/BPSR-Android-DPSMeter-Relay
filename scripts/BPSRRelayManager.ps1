@@ -233,27 +233,47 @@ function Save-RollbackRuntime {
     Add-Log ('Saved previous verified sing-box runtime ' + $version + ' for rollback.')
 }
 
+function Get-PinnedSingBoxAsset {
+    param([string]$Version, [string]$Architecture)
+
+    if ($Version -ne 'v1.13.19') {
+        throw ('No pinned download metadata is available for sing-box ' + $Version + '.')
+    }
+
+    switch ($Architecture) {
+        'amd64' {
+            $name = 'sing-box-1.13.19-windows-amd64.zip'
+            $sha256 = 'e011a4def2f5e2b143ed54adb2b1a20a6be407806ab4442f3667f1dd817a2c8d'
+        }
+        'arm64' {
+            $name = 'sing-box-1.13.19-windows-arm64.zip'
+            $sha256 = 'dbb6c4803f94a997fcc4a1cce313eff65a901abc197731b55109ea4fbd412c88'
+        }
+        default {
+            throw ('No pinned download metadata is available for Windows/' + $Architecture + '.')
+        }
+    }
+
+    return [PSCustomObject]@{
+        Name = $name
+        Sha256 = $sha256
+        Url = 'https://github.com/SagerNet/sing-box/releases/download/v1.13.19/' + $name
+    }
+}
+
 function Install-SingBoxVersion {
     param([string]$Version)
 
     Ensure-Directories
     $arch = Get-SingBoxArchitecture
-    $number = $Version.TrimStart('v')
     Add-Log ('Downloading tested sing-box ' + $Version + ' for Windows/' + $arch + '...')
 
-    $releaseUri = 'https://api.github.com/repos/SagerNet/sing-box/releases/tags/' + $Version
-    $release = Invoke-RestMethod -Uri $releaseUri -UseBasicParsing -Headers @{ 'User-Agent' = 'BPSR-Android-DPSMeter-Relay' }
-    if (-not $release -or [string]$release.tag_name -ne $Version) {
-        throw ('Could not resolve official sing-box release ' + $Version + '.')
+    $asset = Get-PinnedSingBoxAsset -Version $Version -Architecture $arch
+    $assetName = [string]$asset.Name
+    $expectedZipHash = ([string]$asset.Sha256).ToLowerInvariant()
+    if ($expectedZipHash -notmatch '^[a-f0-9]{64}$') {
+        throw 'Pinned sing-box SHA256 metadata is invalid.'
     }
-
-    $assetName = 'sing-box-' + $number + '-windows-' + $arch + '.zip'
-    $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-    if (-not $asset) { throw ('Official release asset not found: ' + $assetName) }
-    if ([string]$asset.digest -notmatch '^sha256:([a-fA-F0-9]{64})$') {
-        throw 'The official release asset did not expose a SHA256 digest. Refusing an unverified runtime download.'
-    }
-    $expectedZipHash = $Matches[1].ToLowerInvariant()
 
     $temp = Join-Path $Runtime 'download-temp'
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
@@ -261,12 +281,12 @@ function Install-SingBoxVersion {
 
     try {
         $zipPath = Join-Path $temp $assetName
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing -Headers @{ 'User-Agent' = 'BPSR-Android-DPSMeter-Relay' }
+        Invoke-WebRequest -Uri ([string]$asset.Url) -OutFile $zipPath -UseBasicParsing -Headers @{ 'User-Agent' = 'BPSR-Android-DPSMeter-Relay' }
         $actualZipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualZipHash -ne $expectedZipHash) {
             throw 'SHA256 verification failed for the official sing-box archive.'
         }
-        Add-Log 'Official sing-box archive SHA256 verification passed.'
+        Add-Log 'Pinned official sing-box archive SHA256 verification passed.'
 
         $extract = Join-Path $temp 'extracted'
         Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
