@@ -135,7 +135,7 @@ jobs:
           }
 
           $engineHotStart = $text.IndexOf('function Get-RelayTrackedRunning', [System.StringComparison]::Ordinal)
-          $engineHotEnd = $text.IndexOf('function Copy-Diagnostics', $engineHotStart, [System.StringComparison]::Ordinal)
+          $engineHotEnd = $text.IndexOf('function Start-ProfileShare', $engineHotStart, [System.StringComparison]::Ordinal)
           if ($engineHotStart -lt 0 -or $engineHotEnd -le $engineHotStart) { throw 'Could not isolate Get-RelayTrackedRunning.' }
           $engineHot = $text.Substring($engineHotStart, $engineHotEnd - $engineHotStart)
           foreach ($forbidden in @('Get-FileHash', 'Get-CimInstance', 'Read-JsonFile', 'Get-NetIPConfiguration', 'Get-NetAdapter', 'Get-NetTCPConnection')) {
