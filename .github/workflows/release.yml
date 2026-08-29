@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -57,11 +58,35 @@ jobs:
           }
 
           $readme = Get-Content '.\README.md' -Raw
-          if ($readme -match '1\.0\.0-rc\.' -or $readme -match 'NOT quite yet') {
+          if ($readme -match '1\.0\.0-rc\.' -or $readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
             throw 'README still contains prerelease/release-gate wording. Finalize documentation first.'
           }
 
-          Write-Host ('Stable release gate passed for v' + $version + '.')
+          Write-Host ('Stable source/documentation gate passed for v' + $version + '.')
+
+      - name: Require green Validate run for exact commit
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $json = gh run list `
+            --repo '${{ github.repository }}' `
+            --workflow 'Validate' `
+            --commit $env:GITHUB_SHA `
+            --limit 20 `
+            --json databaseId,status,conclusion,event,headSha
+          if ($LASTEXITCODE -ne 0) { throw 'Could not query Validate workflow history.' }
+
+          $runs = @($json | ConvertFrom-Json)
+          $passed = @($runs | Where-Object {
+            $_.headSha -eq $env:GITHUB_SHA -and
+            $_.status -eq 'completed' -and
+            $_.conclusion -eq 'success'
+          })
+          if ($passed.Count -eq 0) {
+            throw ('Stable release blocked: exact commit ' + $env:GITHUB_SHA + ' does not yet have a completed successful Validate workflow run.')
+          }
+          Write-Host ('Exact-commit Validate gate passed using run ' + $passed[0].databaseId + '.')
 
       - name: Parse PowerShell with Windows PowerShell 5.1
         shell: powershell
