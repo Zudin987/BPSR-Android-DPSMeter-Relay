@@ -2,7 +2,14 @@
 
 Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
 
-**Website:** https://zudin987.github.io/projects/android-relay/
+[Download latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Project website](https://zudin987.github.io/projects/android-relay/) · [Report an issue](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/issues)
+
+## Requirements
+
+- Windows PC and Android phone on the same trusted private network.
+- SFA (sing-box for Android) on the phone.
+- A separate compatible Windows BPSR DPS meter.
+- Administrator approval for the manager’s Windows firewall rule.
 
 ## Use
 
@@ -20,7 +27,7 @@ Daily use is normally just:
 
 ## Compatibility
 
-The relay is **DPS-meter agnostic**. **Any DPS meter that can parse BPSR traffic** from StarSEA can be used, and **Multiple DPS meters** may observe the same stream. The current design keeps the field-tested **v4-compatible** two-stage path with **authenticated SOCKS5** on a trusted home/private LAN.
+The relay forwards game traffic; it does not calculate DPS itself. Use a meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
 
 The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps normal setup on **Home**, troubleshooting on **Details**, and simple instructions on **Help**. The main actions include **Prepare Relay** and **Start Relay**.
 
@@ -36,4 +43,8 @@ The relay does not modify BPSR game files.
 
 **Unofficial community tool.** Not affiliated with BPSR, SFA, sing-box, or any DPS-meter project.
 
-[Direct latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip) · [Latest release](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Source](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay)
+## Troubleshooting
+
+Use **Details** for connection diagnostics and **Help** for the setup sequence. If the phone cannot connect, confirm the PC LAN address, private-network firewall rule and imported SFA profile. If the meter has no data, check that its capture target is **StarSEA**.
+
+Include the relay version, PC/phone connection type and meter name in a bug report. Do not post the phone setup QR profile or relay credentials.
