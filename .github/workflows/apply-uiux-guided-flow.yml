@@ -22,6 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -c 'from pathlib import Path; p=Path(".github/scripts/apply_uiux.py"); s=p.read_text(); s=s.replace("            '\'' -ProfilePath '\'' + (Quote-Argument $AndroidConfig) + '\'' -LifetimeSeconds '\'' + $ShareLifetimeSeconds", "            '\'' -ProfilePath '\'' + (Quote-Argument $AndroidConfig) + \\n            '\'' -LifetimeSeconds '\'' + $ShareLifetimeSeconds"); p.write_text(s)'
           python3 .github/scripts/apply_uiux.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
