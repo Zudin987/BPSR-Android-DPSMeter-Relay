@@ -15,7 +15,7 @@ Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
 
 1. [Download the latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip).
 2. Extract the whole ZIP and run `BPSR Relay Manager.exe`.
-3. Select the PC Ethernet/Wi-Fi address connected to the same router as the phone.
+3. Select the PC Ethernet/Wi-Fi address connected to the same router as the phone. If several adapters are listed, choose the one for the network the phone is actually using.
 4. Follow the blue **NEXT** action: **Prepare Relay** → **Allow Firewall** → **Set Up Phone**.
 5. In Android SFA, import the current QR profile, enable per-app proxy, and select **BPSR only**. Back on the PC, click **Phone Ready** to confirm those two phone-side steps.
 6. Click **Start Relay** on the PC first, then start SFA on the phone, then open BPSR.
