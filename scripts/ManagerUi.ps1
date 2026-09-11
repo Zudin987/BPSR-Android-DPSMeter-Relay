@@ -1086,7 +1086,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Blue NEXT step = what to fix first.`r`n`r`nPhone issue: same Wi-Fi, then Set Up Phone.`r`n`r`nNo DPS: target StarSEA only."
+$problemText.Text = "Blue NEXT = fix this first.`r`nPhone issue: same network, then Set Up Phone.`r`nNo DPS: target StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
