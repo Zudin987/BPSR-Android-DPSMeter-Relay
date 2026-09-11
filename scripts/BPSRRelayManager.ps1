@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.3'
+$ManagerVersion = '1.0.4'
 $TestedSingBoxVersion = 'v1.13.19'
 $FrontPort = 10808
 $InternalPortStart = 18080
@@ -35,6 +35,7 @@ $PhoneProfileStateFile = Join-Path $Runtime 'phone-profile-state.json'
 $FirewallScript = Join-Path $Runtime 'allow-firewall.ps1'
 $ServerScript = Join-Path $PSScriptRoot 'ServeProfile.ps1'
 $LogFile = Join-Path $Runtime 'manager.log'
+$QrHtmlFile = Join-Path $OutputDir 'sfa-setup-qr.html'
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:txtLog = $null
@@ -271,7 +272,10 @@ function Test-PhoneProfileConfirmed {
     if ([string]::IsNullOrWhiteSpace($profileId)) { return $false }
     try {
         $state = Read-JsonFile -Path $PhoneProfileStateFile
-        if ($state -and [string]$state.profileId -eq $profileId) { return $true }
+        if ($state -and [string]$state.profileId -eq $profileId) {
+            $reason = if ($state.PSObject.Properties['reason']) { [string]$state.reason } else { '' }
+            if (@('confirmed', 'user-confirmed-manual-import', 'preserved-unchanged-profile') -contains $reason) { return $true }
+        }
     }
     catch {}
 
@@ -286,6 +290,16 @@ function Test-PhoneProfileConfirmed {
     }
     catch {}
     return $false
+}
+
+function Test-PhoneProfileDownloaded {
+    $profileId = Get-CurrentPhoneProfileId
+    if ([string]::IsNullOrWhiteSpace($profileId)) { return $false }
+    try {
+        $state = Read-JsonFile -Path $PhoneProfileStateFile
+        return ($state -and [string]$state.profileId -eq $profileId -and [string]$state.reason -eq 'profile-downloaded')
+    }
+    catch { return $false }
 }
 
 function Set-PhoneProfileConfirmed {
@@ -595,9 +609,9 @@ function Write-RelayConfigs {
     $importText = @"
 BPSR Android DPSMeter Relay
 
-IMPORTANT FOR v1.0.2:
-If upgrading from an older test build, remove its old BPSR Relay profile and import this newly generated profile.
-v1.0.2 keeps the field-tested Clean v4 routing shape unchanged.
+IMPORTANT:
+If upgrading from an incompatible older test build, remove its old BPSR Relay profile and import this newly generated profile.
+This release keeps the field-tested Clean v4 routing shape unchanged.
 
 PC LAN IPv4 in this profile: $PcIp
 Phone relay port: $FrontPort
@@ -926,6 +940,7 @@ function Stop-ProfileShare {
     }
     $script:shareProcess = $null
     $script:shareUrl = ''
+    Remove-Item -LiteralPath $QrHtmlFile -Force -ErrorAction SilentlyContinue
 }
 
 
@@ -1316,9 +1331,9 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
 
-    Add-Log 'Setup / Repair complete. v1.0.2 keeps the original Clean v4 two-stage SOCKS5 route.'
-    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.2 profile.'
-    Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
+    Add-Log ('Setup / Repair complete. Manager v' + $ManagerVersion + ' keeps the original Clean v4 two-stage SOCKS5 route.')
+    Add-Log 'If upgrading from an incompatible older test build, remove its old SFA profile and import the newly generated current profile.'
+    Add-Log 'Next: Allow Firewall -> Start Phone Setup -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
 
@@ -1512,10 +1527,30 @@ function Show-ShareQr {
     if ([string]::IsNullOrWhiteSpace($script:shareUrl) -or -not $script:shareProcess) { throw 'Start Phone Setup first.' }
     $script:shareProcess.Refresh()
     if ($script:shareProcess.HasExited) { throw 'Phone setup expired. Start Phone Setup again.' }
+
+    $qrLibrary = Join-Path $PSScriptRoot 'vendor\qrcode.min.js'
+    if (-not (Test-Path -LiteralPath $qrLibrary -PathType Leaf)) {
+        throw 'Local QR component is missing. Re-extract the complete release ZIP.'
+    }
+
     $sfaImportUrl = Get-SfaImportUrl
-    $qrUrl = 'https://quickchart.io/qr?size=420&margin=2&text=' + [Uri]::EscapeDataString($sfaImportUrl)
-    Start-Process $qrUrl | Out-Null
-    Add-Log 'Opened SFA-ready QR. On Android: SFA > + > Scan QR Code.'
+    $payload = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($sfaImportUrl))
+    $qrJs = Get-Content -LiteralPath $qrLibrary -Raw
+    $html = @"
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BPSR Relay - SFA QR</title>
+<style>body{font-family:Segoe UI,system-ui,sans-serif;background:#f4f7fb;color:#0f172a;margin:0;padding:32px}.card{max-width:520px;margin:auto;background:#fff;border:1px solid #dae1eb;border-radius:14px;padding:24px;box-sizing:border-box}h1{font-size:22px;margin:0 0 8px}.muted,.note{color:#64748b}.note{font-size:13px}#qrcode{display:flex;justify-content:center;padding:16px;background:#fff}</style></head>
+<body><div class="card"><h1>BPSR Relay - SFA setup</h1><p class="muted">On Android: SFA &gt; + &gt; Scan QR Code</p><div id="qrcode"></div><p class="note">Generated locally on this PC. No QR data is sent to an external service.</p></div>
+<script>
+$qrJs
+var value=window.atob('$payload');
+new QRCode(document.getElementById('qrcode'),{text:value,width:420,height:420,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+</script></body></html>
+"@
+    Write-Utf8NoBom -Path $QrHtmlFile -Text $html
+    Start-Process -FilePath $QrHtmlFile | Out-Null
+    Add-Log 'Opened locally generated SFA-ready QR. No QR payload was sent to an external service.'
 }
 
 function Open-ProfileFolder {
@@ -1584,10 +1619,10 @@ function Get-PreflightChecks {
 
     $profileIp = Get-ProfilePcIp
     if ($profileIp -eq $PcIp) {
-        Add-CheckLocal 'Android profile' 'OK' ('v1.0.2 v4-compatible profile matches ' + $PcIp)
+        Add-CheckLocal 'Android profile' 'OK' ('Current v4-compatible profile matches ' + $PcIp)
     }
     elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
-        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.2 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+        Add-CheckLocal 'Android profile' 'FAIL' 'Current profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
     }
     else {
         Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
@@ -1670,7 +1705,7 @@ function Start-Relay {
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'v1.0.2 two-stage relay is already running.'
+        Add-Log ('Manager v' + $ManagerVersion + ' two-stage relay is already running.')
         Update-Status
         return
     }
@@ -1831,7 +1866,7 @@ Localhost StarSEA bridge port: $internalPortText
 Relay listener health: $($script:lastListenerHealthDetail)
 Topology: $topology
 Ingress transport: authenticated SOCKS5 on trusted Private LAN
-Phone-to-PC encryption: DISABLED in v1.0.2 compatibility mode
+Phone-to-PC encryption: DISABLED (authenticated SOCKS5 on trusted Private LAN)
 Android protocol sniffing: DISABLED
 Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
 Multiplexing: DISABLED

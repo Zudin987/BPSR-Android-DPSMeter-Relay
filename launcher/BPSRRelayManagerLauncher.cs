@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Launcher for BPSR Android DPSMeter Relay")]
 [assembly: AssemblyCompany("Zudin987")]
 [assembly: AssemblyProduct("BPSR Android DPSMeter Relay")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("0.0.0.0")]
+[assembly: AssemblyFileVersion("0.0.0.0")]
 
 namespace BpsrRelayManagerLauncher
 {
