@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to publish (example: 1.0.3)'
+        description: 'Stable version to publish (example: 1.0.4)'
         required: true
-        default: '1.0.3'
+        default: '1.0.4'
         type: string
       field_test_passed:
         description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
