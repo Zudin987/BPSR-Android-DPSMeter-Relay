@@ -27,7 +27,7 @@ Daily use is normally just:
 
 ## Compatibility
 
-The relay forwards game traffic; it does not calculate DPS itself. Use a meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
+The relay is **DPS-meter agnostic**: it forwards game traffic and does not calculate DPS itself. Use any compatible Windows meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
 
 The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps normal setup on **Home**, troubleshooting on **Details**, and simple instructions on **Help**. The main actions include **Prepare Relay** and **Start Relay**.
 
