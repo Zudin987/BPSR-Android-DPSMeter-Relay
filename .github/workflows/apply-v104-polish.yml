@@ -1,0 +1,323 @@
+name: Apply v1.0.4 polish hardening
+
+on:
+  push:
+    branches:
+      - feat/v104-polish-hardening
+    paths:
+      - .github/workflows/apply-v104-polish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/v104-polish-hardening
+
+      - name: Apply v1.0.4 polish hardening
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+          function Read-Text([string]$Path) {
+            return [System.IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE $Path))
+          }
+          function Write-Text([string]$Path, [string]$Text) {
+            [System.IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE $Path), $Text, $utf8)
+          }
+          function Replace-Exact([string]$Text, [string]$Old, [string]$New, [string]$Label) {
+            if (-not $Text.Contains($Old)) { throw ('Patch target missing: ' + $Label) }
+            return $Text.Replace($Old, $New)
+          }
+
+          # Engine: version-neutral wording, truthful phone-import state, local QR generation.
+          $enginePath = 'scripts\BPSRRelayManager.ps1'
+          $engine = Read-Text $enginePath
+          $engine = Replace-Exact $engine "`$ManagerVersion = '1.0.3'" "`$ManagerVersion = '1.0.4'" 'manager version'
+          $engine = Replace-Exact $engine "`$LogFile = Join-Path `$Runtime 'manager.log'" "`$LogFile = Join-Path `$Runtime 'manager.log'`r`n`$QrHtmlFile = Join-Path `$OutputDir 'sfa-setup-qr.html'" 'QR html path'
+          $engine = Replace-Exact $engine "        if (`$state -and [string]`$state.profileId -eq `$profileId) { return `$true }" @"
+        if (`$state -and [string]`$state.profileId -eq `$profileId) {
+            `$reason = if (`$state.PSObject.Properties['reason']) { [string]`$state.reason } else { '' }
+            if (@('confirmed', 'user-confirmed-manual-import', 'preserved-unchanged-profile') -contains `$reason) { return `$true }
+        }
+"@ 'phone confirmation semantics'
+          $engine = Replace-Exact $engine "function Set-PhoneProfileConfirmed {" @"
+function Test-PhoneProfileDownloaded {
+    `$profileId = Get-CurrentPhoneProfileId
+    if ([string]::IsNullOrWhiteSpace(`$profileId)) { return `$false }
+    try {
+        `$state = Read-JsonFile -Path `$PhoneProfileStateFile
+        return (`$state -and [string]`$state.profileId -eq `$profileId -and [string]`$state.reason -eq 'profile-downloaded')
+    }
+    catch { return `$false }
+}
+
+function Set-PhoneProfileConfirmed {
+"@ 'downloaded profile helper'
+
+          $oldImport = @"
+IMPORTANT FOR v1.0.2:
+If upgrading from an older test build, remove its old BPSR Relay profile and import this newly generated profile.
+v1.0.2 keeps the field-tested Clean v4 routing shape unchanged.
+"@
+          $newImport = @"
+IMPORTANT:
+If upgrading from an incompatible older test build, remove its old BPSR Relay profile and import this newly generated profile.
+This release keeps the field-tested Clean v4 routing shape unchanged.
+"@
+          $engine = Replace-Exact $engine $oldImport $newImport 'generated profile version wording'
+          $engine = Replace-Exact $engine "    Add-Log 'Setup / Repair complete. v1.0.2 keeps the original Clean v4 two-stage SOCKS5 route.'" "    Add-Log ('Setup / Repair complete. Manager v' + `$ManagerVersion + ' keeps the original Clean v4 two-stage SOCKS5 route.')" 'setup completion version'
+          $engine = Replace-Exact $engine "    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.2 profile.'" "    Add-Log 'If upgrading from an incompatible older test build, remove its old SFA profile and import the newly generated current profile.'" 'setup import wording'
+          $engine = Replace-Exact $engine "    Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'" "    Add-Log 'Next: Allow Firewall -> Start Phone Setup -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'" 'setup next step wording'
+          $engine = Replace-Exact $engine "        Add-CheckLocal 'Android profile' 'OK' ('v1.0.2 v4-compatible profile matches ' + `$PcIp)" "        Add-CheckLocal 'Android profile' 'OK' ('Current v4-compatible profile matches ' + `$PcIp)" 'preflight profile ok'
+          $engine = Replace-Exact $engine "        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.2 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'" "        Add-CheckLocal 'Android profile' 'FAIL' 'Current profile is not generated. Click Prepare Relay, then import the new profile into SFA.'" 'preflight profile fail'
+          $engine = Replace-Exact $engine "        Add-Log 'v1.0.2 two-stage relay is already running.'" "        Add-Log ('Manager v' + `$ManagerVersion + ' two-stage relay is already running.')" 'already running version'
+          $engine = Replace-Exact $engine 'Phone-to-PC encryption: DISABLED in v1.0.2 compatibility mode' 'Phone-to-PC encryption: DISABLED (authenticated SOCKS5 on trusted Private LAN)' 'diagnostic encryption wording'
+
+          $oldStopShare = @"
+function Stop-ProfileShare {
+    if (`$script:shareProcess) {
+        try {
+            `$script:shareProcess.Refresh()
+            if (-not `$script:shareProcess.HasExited) {
+                Stop-Process -Id `$script:shareProcess.Id -Force -ErrorAction SilentlyContinue
+                Add-Log 'Stopped temporary phone profile sharing.'
+            }
+        }
+        catch {}
+    }
+    `$script:shareProcess = `$null
+    `$script:shareUrl = ''
+}
+"@
+          $newStopShare = @"
+function Stop-ProfileShare {
+    if (`$script:shareProcess) {
+        try {
+            `$script:shareProcess.Refresh()
+            if (-not `$script:shareProcess.HasExited) {
+                Stop-Process -Id `$script:shareProcess.Id -Force -ErrorAction SilentlyContinue
+                Add-Log 'Stopped temporary phone profile sharing.'
+            }
+        }
+        catch {}
+    }
+    `$script:shareProcess = `$null
+    `$script:shareUrl = ''
+    Remove-Item -LiteralPath `$QrHtmlFile -Force -ErrorAction SilentlyContinue
+}
+"@
+          $engine = Replace-Exact $engine $oldStopShare $newStopShare 'phone share cleanup'
+
+          $oldQr = @"
+function Show-ShareQr {
+    if ([string]::IsNullOrWhiteSpace(`$script:shareUrl) -or -not `$script:shareProcess) { throw 'Start Phone Setup first.' }
+    `$script:shareProcess.Refresh()
+    if (`$script:shareProcess.HasExited) { throw 'Phone setup expired. Start Phone Setup again.' }
+    `$sfaImportUrl = Get-SfaImportUrl
+    `$qrUrl = 'https://quickchart.io/qr?size=420&margin=2&text=' + [Uri]::EscapeDataString(`$sfaImportUrl)
+    Start-Process `$qrUrl | Out-Null
+    Add-Log 'Opened SFA-ready QR. On Android: SFA > + > Scan QR Code.'
+}
+"@
+          $newQr = @"
+function Show-ShareQr {
+    if ([string]::IsNullOrWhiteSpace(`$script:shareUrl) -or -not `$script:shareProcess) { throw 'Start Phone Setup first.' }
+    `$script:shareProcess.Refresh()
+    if (`$script:shareProcess.HasExited) { throw 'Phone setup expired. Start Phone Setup again.' }
+
+    `$qrLibrary = Join-Path `$PSScriptRoot 'vendor\qrcode.min.js'
+    if (-not (Test-Path -LiteralPath `$qrLibrary -PathType Leaf)) {
+        throw 'Local QR component is missing. Re-extract the complete release ZIP.'
+    }
+
+    `$sfaImportUrl = Get-SfaImportUrl
+    `$payload = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(`$sfaImportUrl))
+    `$qrJs = Get-Content -LiteralPath `$qrLibrary -Raw
+    `$html = @"
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BPSR Relay - SFA QR</title>
+<style>
+body{font-family:Segoe UI,system-ui,sans-serif;background:#f4f7fb;color:#0f172a;margin:0;padding:32px}
+.card{max-width:520px;margin:0 auto;background:#fff;border:1px solid #dae1eb;border-radius:14px;padding:24px;box-sizing:border-box}
+h1{font-size:22px;margin:0 0 8px}.muted{color:#64748b;margin:0 0 18px}#qrcode{display:flex;justify-content:center;padding:16px;background:#fff}.note{font-size:13px;color:#64748b;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>BPSR Relay - SFA setup</h1>
+<p class="muted">On Android: SFA &gt; + &gt; Scan QR Code</p>
+<div id="qrcode"></div>
+<p class="note">Generated locally on this PC. No QR data is sent to an external service.</p>
+</div>
+<script>
+`$qrJs
+var value = window.atob('$payload');
+new QRCode(document.getElementById('qrcode'), {text:value,width:420,height:420,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+</script>
+</body>
+</html>
+"@
+    Write-Utf8NoBom -Path `$QrHtmlFile -Text `$html
+    Start-Process -FilePath `$QrHtmlFile | Out-Null
+    Add-Log 'Opened locally generated SFA-ready QR. No QR payload was sent to an external service.'
+}
+"@
+          $engine = Replace-Exact $engine $oldQr $newQr 'local QR implementation'
+          Write-Text $enginePath $engine
+
+          # UI: expose downloaded-vs-confirmed state clearly.
+          $uiPath = 'scripts\ManagerUi.ps1'
+          $ui = Read-Text $uiPath
+          $ui = Replace-Exact $ui "    `$phoneConfirmed = `$false" "    `$phoneConfirmed = `$false`r`n    `$phoneDownloaded = `$false" 'phone downloaded state init'
+          $oldProfileStatus = @"
+        `$phoneConfirmed = Test-PhoneProfileConfirmed
+        if (`$phoneConfirmed) {
+            Set-UiStatusLabel -Label `$script:lblProfileState -Text 'Ready' -State 'Ready'
+        }
+        else {
+            Set-UiStatusLabel -Label `$script:lblProfileState -Text 'Import needed' -State 'Warning'
+        }
+"@
+          $newProfileStatus = @"
+        `$phoneConfirmed = Test-PhoneProfileConfirmed
+        `$phoneDownloaded = Test-PhoneProfileDownloaded
+        if (`$phoneConfirmed) {
+            Set-UiStatusLabel -Label `$script:lblProfileState -Text 'Ready' -State 'Ready'
+        }
+        elseif (`$phoneDownloaded) {
+            Set-UiStatusLabel -Label `$script:lblProfileState -Text 'Downloaded - confirm' -State 'Warning'
+        }
+        else {
+            Set-UiStatusLabel -Label `$script:lblProfileState -Text 'Import needed' -State 'Warning'
+        }
+"@
+          $ui = Replace-Exact $ui $oldProfileStatus $newProfileStatus 'profile status differentiation'
+          $oldNext = @"
+    elseif (-not `$phoneConfirmed) {
+        if (`$script:shareProcess) {
+            `$script:lblNextAction.Text = 'Phone setup is open. Scan the QR and import BPSR Relay in SFA.'
+        }
+        else {
+            `$script:lblNextAction.Text = 'Click Start Phone Setup and import the current BPSR Relay profile in SFA.'
+        }
+    }
+"@
+          $newNext = @"
+    elseif (-not `$phoneConfirmed) {
+        if (`$phoneDownloaded) {
+            `$script:lblNextAction.Text = 'Profile downloaded. Confirm it is imported in SFA, then click Start Relay.'
+        }
+        elseif (`$script:shareProcess) {
+            `$script:lblNextAction.Text = 'Phone setup is open. Scan the QR and import BPSR Relay in SFA.'
+        }
+        else {
+            `$script:lblNextAction.Text = 'Click Start Phone Setup and import the current BPSR Relay profile in SFA.'
+        }
+    }
+"@
+          $ui = Replace-Exact $ui $oldNext $newNext 'next action downloaded state'
+          $oldPrompt = @"
+        if (-not (Test-PhoneProfileConfirmed)) {
+            `$choice = [System.Windows.Forms.MessageBox]::Show(
+                "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.`r`n`r`nYes: open Phone Setup now (recommended).`r`nNo: I already imported this exact current profile; remember it and start.`r`nCancel: do nothing.",
+                'Finish phone setup first',
+"@
+          $newPrompt = @"
+        if (-not (Test-PhoneProfileConfirmed)) {
+            `$downloaded = Test-PhoneProfileDownloaded
+            `$promptText = if (`$downloaded) {
+                "The current profile was downloaded, but Windows cannot verify that SFA imported it.`r`n`r`nYes: open Phone Setup again.`r`nNo: I checked SFA and this exact current profile is imported; remember it and start.`r`nCancel: do nothing."
+            }
+            else {
+                "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.`r`n`r`nYes: open Phone Setup now (recommended).`r`nNo: I already imported this exact current profile; remember it and start.`r`nCancel: do nothing."
+            }
+            `$choice = [System.Windows.Forms.MessageBox]::Show(
+                `$promptText,
+                'Finish phone setup first',
+"@
+          $ui = Replace-Exact $ui $oldPrompt $newPrompt 'guided start confirmation wording'
+          Write-Text $uiPath $ui
+
+          # Launcher source remains compilable in the repo; BuildRelease injects the real release version.
+          $launcherPath = 'launcher\BPSRRelayManagerLauncher.cs'
+          $launcher = Read-Text $launcherPath
+          $launcher = Replace-Exact $launcher '[assembly: AssemblyVersion("1.0.0.0")]' "// BuildRelease.ps1 replaces these neutral source values with the current ManagerVersion.`r`n[assembly: AssemblyVersion(\"0.0.0.0\")]" 'launcher assembly version'
+          $launcher = Replace-Exact $launcher '[assembly: AssemblyFileVersion("1.0.0.0")]' '[assembly: AssemblyFileVersion("0.0.0.0")]' 'launcher file version'
+          Write-Text $launcherPath $launcher
+
+          # Release builder: inject EXE version and include pinned local QR component + license.
+          $builderPath = 'scripts\BuildRelease.ps1'
+          $builder = Read-Text $builderPath
+          $builder = Replace-Exact $builder "`$launcherExe = Join-Path `$launcherBuildRoot 'BPSR Relay Manager.exe'" @"
+`$launcherExe = Join-Path `$launcherBuildRoot 'BPSR Relay Manager.exe'
+`$launcherCompileSource = Join-Path `$launcherBuildRoot 'BPSRRelayManagerLauncher.cs'
+"@ 'launcher compile source path'
+          $builder = Replace-Exact $builder "New-Item -ItemType Directory -Path `$launcherBuildRoot -Force | Out-Null`r`nNew-Item -ItemType Directory -Path (Join-Path `$stage 'scripts') -Force | Out-Null" @"
+New-Item -ItemType Directory -Path `$launcherBuildRoot -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path `$stage 'scripts') -Force | Out-Null
+
+`$assemblyVersion = ((`$version -split '-', 2)[0] + '.0')
+`$launcherSourceText = Get-Content -LiteralPath `$launcherSourcePath -Raw
+`$launcherSourceText = [regex]::Replace(`$launcherSourceText, '\[assembly: AssemblyVersion\("[^"]+"\)\]', '[assembly: AssemblyVersion("' + `$assemblyVersion + '")]')
+`$launcherSourceText = [regex]::Replace(`$launcherSourceText, '\[assembly: AssemblyFileVersion\("[^"]+"\)\]', '[assembly: AssemblyFileVersion("' + `$assemblyVersion + '")]')
+[System.IO.File]::WriteAllText(`$launcherCompileSource, `$launcherSourceText, (New-Object System.Text.UTF8Encoding(`$false)))
+"@ 'launcher version injection'
+          $builder = Replace-Exact $builder "    `$launcherSourcePath 2>&1" "    `$launcherCompileSource 2>&1" 'compile patched launcher source'
+          $builder = Replace-Exact $builder "if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$launcherExe -PathType Leaf)) {`r`n    throw ('Native launcher compilation failed: ' + ((`$compilerOutput | Out-String).Trim()))`r`n}" @"
+if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$launcherExe -PathType Leaf)) {
+    throw ('Native launcher compilation failed: ' + ((`$compilerOutput | Out-String).Trim()))
+}
+`$launcherVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(`$launcherExe)
+if ([string]`$launcherVersionInfo.FileVersion -ne `$assemblyVersion) {
+    throw ('Launcher file version mismatch. Expected ' + `$assemblyVersion + ', got ' + [string]`$launcherVersionInfo.FileVersion)
+}
+"@ 'verify launcher file version'
+          $builder = Replace-Exact $builder "    @{ Source = 'scripts\ServeProfile.ps1'; Destination = 'scripts\ServeProfile.ps1' }" @"
+    @{ Source = 'scripts\ServeProfile.ps1'; Destination = 'scripts\ServeProfile.ps1' },
+    @{ Source = 'scripts\vendor\qrcode.min.js'; Destination = 'scripts\vendor\qrcode.min.js' },
+    @{ Source = 'scripts\vendor\qrcodejs-LICENSE.txt'; Destination = 'scripts\vendor\qrcodejs-LICENSE.txt' }
+"@ 'vendor files in package'
+          $builder = Replace-Exact $builder "    'scripts\ServeProfile.ps1'`r`n)" @"
+    'scripts\ServeProfile.ps1',
+    'scripts\vendor\qrcode.min.js',
+    'scripts\vendor\qrcodejs-LICENSE.txt'
+)
+"@ 'vendor required package files'
+          Write-Text $builderPath $builder
+
+          # Pin the tiny MIT qrcodejs dependency to an immutable upstream commit.
+          $vendorDir = Join-Path $env:GITHUB_WORKSPACE 'scripts\vendor'
+          New-Item -ItemType Directory -Path $vendorDir -Force | Out-Null
+          $upstream = '04f46c6a0708418cb7b96fc563eacae0fbf77674'
+          Invoke-WebRequest -UseBasicParsing -Uri ('https://raw.githubusercontent.com/davidshimjs/qrcodejs/' + $upstream + '/qrcode.min.js') -OutFile (Join-Path $vendorDir 'qrcode.min.js')
+          Invoke-WebRequest -UseBasicParsing -Uri ('https://raw.githubusercontent.com/davidshimjs/qrcodejs/' + $upstream + '/LICENSE') -OutFile (Join-Path $vendorDir 'qrcodejs-LICENSE.txt')
+          if ((Get-Item (Join-Path $vendorDir 'qrcode.min.js')).Length -lt 10000) { throw 'Pinned qrcodejs download looks incomplete.' }
+
+          # Refuse accidental stale release copy in runtime/UI code.
+          foreach (`$path in @(`$enginePath, `$uiPath)) {
+            `$text = Read-Text `$path
+            if (`$text.Contains('v1.0.2')) { throw ('Stale v1.0.2 wording remains in ' + `$path) }
+          }
+          if ((Read-Text `$enginePath).Contains('quickchart.io')) { throw 'External QuickChart dependency was not fully removed.' }
+
+      - name: Commit polish changes
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts launcher
+          if (git diff --cached --quiet) { throw 'Patch produced no changes.' }
+          git commit -m "Polish v1.0.4 runtime and setup UX"
+          git push origin HEAD:feat/v104-polish-hardening
