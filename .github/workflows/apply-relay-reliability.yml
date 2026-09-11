@@ -5,7 +5,6 @@ on:
     branches:
       - fix/relay-reliability-health
     paths:
-      - .relay-reliability.patch
       - .github/workflows/apply-relay-reliability.yml
 
 permissions:
@@ -21,12 +20,488 @@ jobs:
           ref: fix/relay-reliability-health
           fetch-depth: 0
 
-      - name: Apply audited patch
+      - name: Apply audited exact-text edits
         shell: bash
         run: |
           set -euo pipefail
-          git apply --check .relay-reliability.patch
-          git apply .relay-reliability.patch
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manager_path = Path('scripts/BPSRRelayManager.ps1')
+          smoke_path = Path('scripts/TestRelaySmoke.ps1')
+          manager = manager_path.read_text(encoding='utf-8')
+          smoke = smoke_path.read_text(encoding='utf-8')
+
+          def once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          manager = once(manager,
+              "$MaxLogBytes = 2097152\n",
+              "$MaxLogBytes = 2097152\n$RelayListenerHealthIntervalSeconds = 10\n",
+              'listener health interval')
+
+          manager = once(manager,
+              "$script:trackedRelayIdentityLoaded = $false\n",
+              "$script:trackedRelayIdentityLoaded = $false\n$script:trackedPcIp = ''\n$script:trackedInternalPort = 0\n$script:lastListenerHealthCheckUtc = [DateTime]::MinValue\n$script:lastListenerHealthOk = $false\n$script:lastListenerHealthDetail = 'not checked'\n",
+              'tracked listener state')
+
+          manager = once(manager,
+          """function Write-Utf8NoBom {
+              param([string]$Path, [string]$Text)
+              [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+          }
+          """,
+          """function Write-Utf8NoBom {
+              param([string]$Path, [string]$Text)
+
+              $directory = Split-Path -Parent $Path
+              if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+                  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+              }
+
+              # Write state/config files through a same-directory temporary file so
+              # an interrupted write cannot leave half-written JSON or PID state.
+              $tempPath = $Path + '.tmp-' + [Guid]::NewGuid().ToString('N')
+              [System.IO.File]::WriteAllText($tempPath, $Text, $Utf8NoBom)
+              try {
+                  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                      try {
+                          [System.IO.File]::Replace($tempPath, $Path, $null, $true)
+                      }
+                      catch {
+                          Move-Item -LiteralPath $tempPath -Destination $Path -Force
+                      }
+                  }
+                  else {
+                      [System.IO.File]::Move($tempPath, $Path)
+                  }
+              }
+              finally {
+                  if (Test-Path -LiteralPath $tempPath) {
+                      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+                  }
+              }
+          }
+          """, 'atomic UTF-8 writer')
+
+          manager = manager.replace('v1.0.2-rc.1', 'v1.0.2')
+
+          manager = once(manager,
+          """    if ($starOk -and $frontOk) {
+                  $script:trackedStarPid = $starPid
+                  $script:trackedStarStartUtc = $starStart
+                  $script:trackedFrontPid = $frontPid
+                  $script:trackedFrontStartUtc = $frontStart
+              }
+          """,
+          """    if ($starOk -and $frontOk) {
+                  $script:trackedStarPid = $starPid
+                  $script:trackedStarStartUtc = $starStart
+                  $script:trackedFrontPid = $frontPid
+                  $script:trackedFrontStartUtc = $frontStart
+                  $script:trackedPcIp = [string]$state.pcIp
+                  $script:trackedInternalPort = if ($state.PSObject.Properties['internalPort']) { [int]$state.internalPort } else { 0 }
+                  if ($script:trackedInternalPort -le 0) {
+                      try {
+                          $starConfigObject = Read-JsonFile -Path $StarConfig
+                          $starInbound = @($starConfigObject.inbounds | Select-Object -First 1)[0]
+                          if ($starInbound) { $script:trackedInternalPort = [int]$starInbound.listen_port }
+                      }
+                      catch { $script:trackedInternalPort = 0 }
+                  }
+                  if ([string]::IsNullOrWhiteSpace($script:trackedPcIp)) {
+                      $script:trackedPcIp = Get-ProfilePcIp
+                  }
+                  $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+                  $script:lastListenerHealthOk = $true
+                  $script:lastListenerHealthDetail = 'pending listener verification'
+              }
+          """, 'load tracked listener metadata')
+
+          manager = once(manager,
+          """function Set-TrackedRelayIdentity {
+              param(
+                  [int]$StarProcessId,
+                  [string]$StarStartUtc,
+                  [int]$FrontProcessId,
+                  [string]$FrontStartUtc
+              )
+              $script:trackedStarPid = $StarProcessId
+              $script:trackedStarStartUtc = $StarStartUtc
+              $script:trackedFrontPid = $FrontProcessId
+              $script:trackedFrontStartUtc = $FrontStartUtc
+              $script:trackedRelayIdentityLoaded = $true
+          }
+          """,
+          """function Set-TrackedRelayIdentity {
+              param(
+                  [int]$StarProcessId,
+                  [string]$StarStartUtc,
+                  [int]$FrontProcessId,
+                  [string]$FrontStartUtc,
+                  [string]$PcIp = '',
+                  [int]$InternalPort = 0
+              )
+              $script:trackedStarPid = $StarProcessId
+              $script:trackedStarStartUtc = $StarStartUtc
+              $script:trackedFrontPid = $FrontProcessId
+              $script:trackedFrontStartUtc = $FrontStartUtc
+              $script:trackedRelayIdentityLoaded = $true
+              $script:trackedPcIp = $PcIp
+              $script:trackedInternalPort = $InternalPort
+              $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+              $script:lastListenerHealthOk = $true
+              $script:lastListenerHealthDetail = 'pending listener verification'
+          }
+          """, 'set tracked listener metadata')
+
+          manager = once(manager,
+          """function Clear-TrackedRelayIdentity {
+              $script:trackedStarPid = 0
+              $script:trackedStarStartUtc = ''
+              $script:trackedFrontPid = 0
+              $script:trackedFrontStartUtc = ''
+              $script:trackedRelayIdentityLoaded = $true
+          }
+          """,
+          """function Clear-TrackedRelayIdentity {
+              $script:trackedStarPid = 0
+              $script:trackedStarStartUtc = ''
+              $script:trackedFrontPid = 0
+              $script:trackedFrontStartUtc = ''
+              $script:trackedRelayIdentityLoaded = $true
+              $script:trackedPcIp = ''
+              $script:trackedInternalPort = 0
+              $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+              $script:lastListenerHealthOk = $false
+              $script:lastListenerHealthDetail = 'not running'
+          }
+          """, 'clear tracked listener metadata')
+
+          listener_helpers = r'''function Test-ProcessRelayListeners {
+              param(
+                  [int]$ProcessId,
+                  [string]$Address,
+                  [int]$Port,
+                  [switch]$TcpOnly
+              )
+
+              if ($ProcessId -le 0 -or $Port -le 0) { return $false }
+              $tcpReady = @(Get-ListeningConnections -Port $Port | Where-Object {
+                  [int]$_.OwningProcess -eq $ProcessId -and
+                  ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
+              }).Count -gt 0
+              if (-not $tcpReady) { return $false }
+              if ($TcpOnly) { return $true }
+
+              $udpReady = @(Get-ListeningUdpEndpoints -Port $Port | Where-Object {
+                  [int]$_.OwningProcess -eq $ProcessId -and
+                  ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
+              }).Count -gt 0
+              return $udpReady
+          }
+
+          function Test-CachedRelayListenerHealth {
+              $now = [DateTime]::UtcNow
+              if (($now - $script:lastListenerHealthCheckUtc).TotalSeconds -lt $RelayListenerHealthIntervalSeconds) {
+                  return $script:lastListenerHealthOk
+              }
+
+              $script:lastListenerHealthCheckUtc = $now
+              if ([string]::IsNullOrWhiteSpace($script:trackedPcIp) -or $script:trackedInternalPort -le 0) {
+                  $script:lastListenerHealthOk = $false
+                  $script:lastListenerHealthDetail = 'tracked relay ports are unavailable'
+                  return $false
+              }
+
+              $frontOk = Test-ProcessRelayListeners -ProcessId $script:trackedFrontPid -Address $script:trackedPcIp -Port $FrontPort
+              $starOk = Test-ProcessRelayListeners -ProcessId $script:trackedStarPid -Address '127.0.0.1' -Port $script:trackedInternalPort
+              $script:lastListenerHealthOk = $frontOk -and $starOk
+              if ($script:lastListenerHealthOk) {
+                  $script:lastListenerHealthDetail = 'TCP+UDP listeners healthy'
+              }
+              else {
+                  $parts = @()
+                  if (-not $frontOk) { $parts += 'BPSRMobileFront listener missing' }
+                  if (-not $starOk) { $parts += 'StarSEA listener missing' }
+                  $script:lastListenerHealthDetail = ($parts -join '; ')
+              }
+              return $script:lastListenerHealthOk
+          }
+
+          '''
+          manager = once(manager, 'function Assert-RelayPortFree {\n', listener_helpers + 'function Assert-RelayPortFree {\n', 'listener health helpers')
+
+          manager = once(manager,
+          """function Wait-ForProcessListener {
+              param(
+                  [int]$ProcessId,
+                  [string]$Address,
+                  [int]$Port,
+                  [string]$ProcessLabel
+              )
+
+              for ($i = 0; $i -lt 40; $i++) {
+                  try {
+                      $process = Get-Process -Id $ProcessId -ErrorAction Stop
+                      if ($process.HasExited) { throw ($ProcessLabel + ' exited during startup.') }
+                  }
+                  catch { throw ($ProcessLabel + ' exited during startup.') }
+
+                  $listeners = @(Get-ListeningConnections -Port $Port | Where-Object {
+                      [int]$_.OwningProcess -eq $ProcessId -and
+                      ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
+                  })
+                  if ($listeners.Count -gt 0) { return }
+                  Start-Sleep -Milliseconds 100
+              }
+              throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' within 4 seconds.')
+          }
+          """,
+          """function Wait-ForProcessListener {
+              param(
+                  [int]$ProcessId,
+                  [string]$Address,
+                  [int]$Port,
+                  [string]$ProcessLabel,
+                  [switch]$TcpOnly
+              )
+
+              for ($i = 0; $i -lt 50; $i++) {
+                  try {
+                      $process = Get-Process -Id $ProcessId -ErrorAction Stop
+                      if ($process.HasExited) { throw ($ProcessLabel + ' exited during startup.') }
+                  }
+                  catch { throw ($ProcessLabel + ' exited during startup.') }
+
+                  if (Test-ProcessRelayListeners -ProcessId $ProcessId -Address $Address -Port $Port -TcpOnly:$TcpOnly) { return }
+                  Start-Sleep -Milliseconds 100
+              }
+              $protocols = if ($TcpOnly) { 'TCP' } else { 'TCP+UDP' }
+              throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' for ' + $protocols + ' within 5 seconds.')
+          }
+          """, 'protocol-complete startup wait')
+
+          manager = once(manager,
+          """        $starMatches = [Math]::Abs(($starActual - $starExpected).TotalSeconds) -le 2
+                  $frontMatches = [Math]::Abs(($frontActual - $frontExpected).TotalSeconds) -le 2
+                  return $starMatches -and $frontMatches
+              }
+              catch { return $false }
+          }
+          """,
+          """        $starMatches = [Math]::Abs(($starActual - $starExpected).TotalSeconds) -le 2
+                  $frontMatches = [Math]::Abs(($frontActual - $frontExpected).TotalSeconds) -le 2
+                  if (-not ($starMatches -and $frontMatches)) {
+                      $script:lastListenerHealthOk = $false
+                      $script:lastListenerHealthDetail = 'tracked process identity changed or exited'
+                      return $false
+                  }
+                  return (Test-CachedRelayListenerHealth)
+              }
+              catch {
+                  $script:lastListenerHealthOk = $false
+                  $script:lastListenerHealthDetail = 'tracked relay process exited'
+                  return $false
+              }
+          }
+          """, 'tracked listener health gate')
+
+          manager = once(manager,
+              "    Stop-ProfileShare\n    Assert-NoForeignRelayProcesses\n    Assert-RelayPortFree\n",
+              "    Stop-ProfileShare\n    Stop-Relay\n    Assert-NoForeignRelayProcesses\n    Assert-RelayPortFree\n",
+              'stale tracked relay cleanup before phone setup')
+
+          manager = once(manager,
+          """    $script:shareProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
+              Start-Sleep -Milliseconds 250
+              $script:shareProcess.Refresh()
+              if ($script:shareProcess.HasExited) {
+                  $script:shareProcess = $null
+                  throw 'Temporary phone sharing server could not start. Check that the relay port is free and the firewall rule exists.'
+              }
+          """,
+          """    $script:shareProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
+              try {
+                  Wait-ForProcessListener -ProcessId $script:shareProcess.Id -Address $pcIp -Port $FrontPort -ProcessLabel 'Phone setup server' -TcpOnly
+              }
+              catch {
+                  if ($script:shareProcess) { Stop-Process -Id $script:shareProcess.Id -Force -ErrorAction SilentlyContinue }
+                  $script:shareProcess = $null
+                  throw
+              }
+          """, 'phone setup listener readiness')
+
+          manager = once(manager,
+              "            pcIp = $pcIp\n            startedUtc = [DateTime]::UtcNow.ToString('o')\n",
+              "            pcIp = $pcIp\n            internalPort = $internalPort\n            startedUtc = [DateTime]::UtcNow.ToString('o')\n",
+              'persist internal bridge port')
+
+          manager = once(manager,
+          """        Set-TrackedRelayIdentity `
+                      -StarProcessId $starProcess.Id `
+                      -StarStartUtc $starStartUtc `
+                      -FrontProcessId $frontProcess.Id `
+                      -FrontStartUtc $frontStartUtc
+          """,
+          """        Set-TrackedRelayIdentity `
+                      -StarProcessId $starProcess.Id `
+                      -StarStartUtc $starStartUtc `
+                      -FrontProcessId $frontProcess.Id `
+                      -FrontStartUtc $frontStartUtc `
+                      -PcIp $pcIp `
+                      -InternalPort $internalPort
+          """, 'track relay endpoint metadata')
+
+          manager = once(manager,
+          """    $listeners = @(Get-ListeningConnections -Port $FrontPort)
+              $listenerText = if ($listeners.Count -eq 0) {
+                  'none'
+              }
+              else {
+                  (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
+              }
+          """,
+          """    $listeners = @(Get-ListeningConnections -Port $FrontPort)
+              $udpListeners = @(Get-ListeningUdpEndpoints -Port $FrontPort)
+              $listenerText = if ($listeners.Count -eq 0) {
+                  'none'
+              }
+              else {
+                  (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
+              }
+              $udpListenerText = if ($udpListeners.Count -eq 0) {
+                  'none'
+              }
+              else {
+                  (($udpListeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
+              }
+          """, 'diagnostic UDP listener')
+
+          manager = once(manager,
+              "Phone relay TCP listener: $listenerText\nLocalhost StarSEA bridge port: $internalPortText\nTopology: $topology\n",
+              "Phone relay TCP listener: $listenerText\nPhone relay UDP listener: $udpListenerText\nLocalhost StarSEA bridge port: $internalPortText\nRelay listener health: $($script:lastListenerHealthDetail)\nTopology: $topology\n",
+              'diagnostic listener health text')
+
+          manager = once(manager,
+          """    if (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
+                  $script:lblRelayState.Text = 'Relay: FOREIGN / DUPLICATE PROCESS DETECTED'
+                  $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
+              }
+              else {
+                  $script:lblRelayState.Text = 'Relay: STOPPED'
+                  $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
+              }
+          """,
+          """    $trackedDegraded = ($script:trackedStarPid -gt 0 -or $script:trackedFrontPid -gt 0)
+              if (-not $trackedDegraded) {
+                  $recorded = Get-RecordedPids
+                  if ($recorded) {
+                      $starRemaining = $false
+                      $frontRemaining = $false
+                      if ($recorded.starPid) {
+                          $starRemaining = Test-ExpectedProcess -ProcessId ([int]$recorded.starPid) -ExpectedPath $StarExe -ExpectedStartUtc ([string]$recorded.starStartUtc)
+                      }
+                      if ($recorded.frontPid) {
+                          $frontRemaining = Test-ExpectedProcess -ProcessId ([int]$recorded.frontPid) -ExpectedPath $FrontExe -ExpectedStartUtc ([string]$recorded.frontStartUtc)
+                      }
+                      $trackedDegraded = $starRemaining -or $frontRemaining
+                  }
+              }
+
+              if ($trackedDegraded) {
+                  $script:lblRelayState.Text = 'Relay: DEGRADED - click Start Relay to repair'
+                  $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkOrange
+              }
+              elseif (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
+                  $script:lblRelayState.Text = 'Relay: FOREIGN / DUPLICATE PROCESS DETECTED'
+                  $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
+              }
+              else {
+                  $script:lblRelayState.Text = 'Relay: STOPPED'
+                  $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
+              }
+          """, 'degraded relay status')
+
+          smoke = once(smoke,
+          """function Get-FreeTcpPort {
+              $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+              try {
+                  $listener.Start()
+                  return [int]$listener.LocalEndpoint.Port
+              }
+              finally { $listener.Stop() }
+          }
+          """,
+          """function Get-FreeRelayPort {
+              $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+              $udp = $null
+              try {
+                  $listener.Start()
+                  $port = [int]$listener.LocalEndpoint.Port
+                  $udp = New-Object System.Net.Sockets.UdpClient
+                  $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Loopback, $port)))
+                  return $port
+              }
+              finally {
+                  if ($udp) { $udp.Dispose() }
+                  $listener.Stop()
+              }
+          }
+
+          function Assert-RelayListeners {
+              param([int]$ProcessId, [int]$Port, [string]$Label)
+              $tcp = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
+              $udp = @(Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
+              if ($tcp.Count -eq 0 -or $udp.Count -eq 0) { throw ($Label + ' did not expose both TCP and UDP listeners on port ' + $Port + '.') }
+          }
+          """, 'smoke TCP+UDP port reservation')
+
+          smoke = smoke.replace('Get-FreeTcpPort', 'Get-FreeRelayPort')
+          smoke = once(smoke,
+          """    foreach ($process in @($httpProcess, $backProcess, $frontProcess)) {
+                  $process.Refresh()
+                  if ($process.HasExited) { throw ('Smoke-test process exited early: PID ' + $process.Id) }
+              }
+
+              $curl = Get-Command curl.exe -ErrorAction Stop
+          """,
+          """    foreach ($process in @($httpProcess, $backProcess, $frontProcess)) {
+                  $process.Refresh()
+                  if ($process.HasExited) { throw ('Smoke-test process exited early: PID ' + $process.Id) }
+              }
+              Assert-RelayListeners -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
+              Assert-RelayListeners -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
+
+              $curl = Get-Command curl.exe -ErrorAction Stop
+          """, 'smoke listener assertions')
+          smoke = smoke.replace(
+              "V4-COMPAT RELAY SMOKE PASS: SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.",
+              "V4-COMPAT RELAY SMOKE PASS: TCP+UDP listener readiness; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.")
+
+          required = [
+              '$RelayListenerHealthIntervalSeconds = 10',
+              'function Test-ProcessRelayListeners',
+              'function Test-CachedRelayListenerHealth',
+              'TCP+UDP listeners healthy',
+              'DEGRADED - click Start Relay to repair',
+              'internalPort = $internalPort',
+          ]
+          for needle in required:
+              if needle not in manager:
+                  raise SystemExit(f'missing manager invariant after edit: {needle}')
+          if 'v1.0.2-rc.1' in manager:
+              raise SystemExit('stale v1.0.2-rc.1 wording remains')
+          if 'Assert-RelayListeners' not in smoke or 'TCP+UDP listener readiness' not in smoke:
+              raise SystemExit('smoke listener hardening missing')
+
+          manager_path.write_text(manager, encoding='utf-8', newline='\n')
+          smoke_path.write_text(smoke, encoding='utf-8', newline='\n')
+          PY
+
           rm -f .relay-reliability.patch .github/workflows/apply-relay-reliability.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
