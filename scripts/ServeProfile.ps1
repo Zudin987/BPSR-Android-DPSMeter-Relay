@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)][int]$Port,
     [Parameter(Mandatory = $true)][string]$Token,
     [Parameter(Mandatory = $true)][string]$ProfilePath,
+    [string]$SuccessMarkerPath = '',
+    [string]$ProfileId = '',
     [int]$LifetimeSeconds = 300
 )
 
@@ -134,7 +136,26 @@ code{background:#292929;padding:2px 6px;border-radius:5px}
             elseif ($path -eq $downloadRoute) {
                 $body = [System.IO.File]::ReadAllBytes($ProfilePath)
                 Write-HttpResponse -Stream $stream -StatusCode 200 -StatusText 'OK' -ContentType 'application/json; charset=utf-8' -Body $body -HeadOnly:$headOnly
-                if (-not $headOnly) { $servedProfile = $true }
+                if (-not $headOnly) {
+                    $servedProfile = $true
+                    if (-not [string]::IsNullOrWhiteSpace($SuccessMarkerPath) -and -not [string]::IsNullOrWhiteSpace($ProfileId)) {
+                        try {
+                            $markerDir = Split-Path -Parent $SuccessMarkerPath
+                            if (-not [string]::IsNullOrWhiteSpace($markerDir) -and -not (Test-Path -LiteralPath $markerDir)) {
+                                New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
+                            }
+                            $markerJson = [ordered]@{
+                                profileId = $ProfileId
+                                confirmedUtc = [DateTime]::UtcNow.ToString('o')
+                                reason = 'profile-downloaded'
+                            } | ConvertTo-Json -Depth 5
+                            $tempMarker = $SuccessMarkerPath + '.tmp-' + [Guid]::NewGuid().ToString('N')
+                            [System.IO.File]::WriteAllText($tempMarker, $markerJson, (New-Object System.Text.UTF8Encoding($false)))
+                            Move-Item -LiteralPath $tempMarker -Destination $SuccessMarkerPath -Force
+                        }
+                        catch {}
+                    }
+                }
             }
             else {
                 $body = [System.Text.Encoding]::UTF8.GetBytes('Not found')

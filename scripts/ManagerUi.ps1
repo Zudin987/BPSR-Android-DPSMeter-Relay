@@ -347,11 +347,12 @@ function Update-UiButtonStates {
         [bool]$ProfileReady = $false,
         [bool]$RuntimeReady = $false,
         [bool]$ForeignRelay = $false,
-        [bool]$FirewallReady = $false
+        [bool]$FirewallReady = $false,
+        [bool]$PhoneConfirmed = $false
     )
 
     if ($script:btnSetup)       { $script:btnSetup.Enabled = -not $Running }
-    if ($script:btnFirewall)    { $script:btnFirewall.Enabled = -not $Running }
+    if ($script:btnFirewall)    { $script:btnFirewall.Enabled = (-not $Running) -and $RuntimeReady -and $ProfileReady -and (-not $ForeignRelay) }
     if ($script:btnShare)       { $script:btnShare.Enabled = (-not $Running) -and $ProfileReady -and $FirewallReady -and (-not $ForeignRelay) }
     if ($script:btnQr)          { $script:btnQr.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
     if ($script:btnUrl)         { $script:btnUrl.Enabled = (-not $Running) -and ($null -ne $script:shareProcess) }
@@ -360,6 +361,56 @@ function Update-UiButtonStates {
     if ($script:btnStop)        { $script:btnStop.Enabled = $Running }
     if ($script:btnStopDetails) { $script:btnStopDetails.Enabled = $Running }
     if ($script:btnRollback)    { $script:btnRollback.Enabled = -not $Running }
+}
+
+function Invoke-StartRelayGuided {
+    try {
+        if (-not (Test-PhoneProfileConfirmed)) {
+            $choice = [System.Windows.Forms.MessageBox]::Show(
+                "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.`r`n`r`nYes: open Phone Setup now (recommended).`r`nNo: I already imported this exact current profile; remember it and start.`r`nCancel: do nothing.",
+                'Finish phone setup first',
+                [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Start-ProfileShare
+                Show-ShareQr
+                return
+            }
+            if ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+                Set-PhoneProfileConfirmed -Reason 'user-confirmed-manual-import'
+            }
+            else { return }
+        }
+        Start-Relay
+    }
+    catch { Show-FriendlyError -Title 'Could not start relay' -Exception $_.Exception }
+    finally { Update-Status }
+}
+
+function Invoke-StopRelayGuided {
+    if (-not (Get-RelayTrackedRunning)) { return }
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "Stop the relay now?`r`n`r`nIf BPSR is using this relay, stopping it can interrupt the phone's game connection.",
+        'Stop relay?',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    try { Stop-Relay }
+    catch { Show-FriendlyError -Title 'Could not stop relay' -Exception $_.Exception }
+}
+
+function Invoke-RestorePreviousGuided {
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "Restore the previous sing-box runtime?`r`n`r`nThis is a troubleshooting action. Normal users should use Prepare Relay instead.",
+        'Restore previous runtime?',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    try { Restore-PreviousRuntime }
+    catch { Show-FriendlyError -Title 'Could not restore previous version' -Exception $_.Exception }
 }
 
 # Override the engine status renderer for the simplified UI.
@@ -387,7 +438,7 @@ function Update-Status {
         Set-UiStatusLabel -Label $script:lblRelayState -Text 'Running' -State 'Running'
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
         Set-UiStatusLabel -Label $script:lblRuntimeState -Text 'Ready' -State 'Ready'
-        Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Not checked' -State 'Neutral'
+        Set-UiStatusLabel -Label $script:lblFirewallState -Text 'Ready at start' -State 'Ready'
         $script:lblNextAction.Text = 'Relay is running. Open BPSR on your phone and play.'
         Update-UiButtonStates -Running $true
         return
@@ -410,12 +461,19 @@ function Update-Status {
     $selected = ([string]$script:cmbIp.Text).Trim()
     $profileIp = Get-ProfilePcIp
     $profileReady = $false
+    $phoneConfirmed = $false
     if ([string]::IsNullOrWhiteSpace($profileIp)) {
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Missing' -State 'Error'
     }
     elseif ($profileIp -eq $selected -and (Test-LocalIpAssigned $selected)) {
         $profileReady = $true
-        Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
+        $phoneConfirmed = Test-PhoneProfileConfirmed
+        if ($phoneConfirmed) {
+            Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
+        }
+        else {
+            Set-UiStatusLabel -Label $script:lblProfileState -Text 'Import needed' -State 'Warning'
+        }
     }
     else {
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Needs update' -State 'Warning'
@@ -469,6 +527,14 @@ function Update-Status {
             $script:lblNextAction.Text = 'Click Allow Firewall so your phone can connect.'
         }
     }
+    elseif (-not $phoneConfirmed) {
+        if ($script:shareProcess) {
+            $script:lblNextAction.Text = 'Phone setup is open. Scan the QR and import BPSR Relay in SFA.'
+        }
+        else {
+            $script:lblNextAction.Text = 'Click Start Phone Setup and import the current BPSR Relay profile in SFA.'
+        }
+    }
     elseif ($script:shareProcess) {
         $script:lblNextAction.Text = 'Phone link is ready. Scan the QR code or copy the link.'
     }
@@ -476,7 +542,7 @@ function Update-Status {
         $script:lblNextAction.Text = 'Setup is ready. Click Start Relay.'
     }
 
-    Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign -FirewallReady $firewallReady
+    Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign -FirewallReady $firewallReady -PhoneConfirmed $phoneConfirmed
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -550,10 +616,10 @@ $addressCard = New-UiCard -X 0 -Y 0 -Width 548 -Height 70
 $script:cmbIp = New-Object System.Windows.Forms.ComboBox
 $script:cmbIp.Location = New-Object System.Drawing.Point(16, 35)
 $script:cmbIp.Size = New-Object System.Drawing.Size(218, 26)
-$script:cmbIp.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+$script:cmbIp.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $addressCard.Controls.Add($script:cmbIp)
 $addressHint = New-Object System.Windows.Forms.Label
-$addressHint.Text = "Usually leave this as-is.`r`nPhone and PC must use the same Wi-Fi."
+$addressHint.Text = "Usually leave this as-is.`r`nPhone and PC must use the same home network/router."
 $addressHint.Location = New-Object System.Drawing.Point(250, 30)
 $addressHint.Size = New-Object System.Drawing.Size(280, 34)
 $addressHint.ForeColor = $Ui.Muted
@@ -573,6 +639,10 @@ if (-not [string]::IsNullOrWhiteSpace($existingProfileIp) -and $script:cmbIp.Ite
     $script:cmbIp.SelectedItem = $existingProfileIp
 }
 elseif ($script:cmbIp.Items.Count -gt 0) { $script:cmbIp.SelectedIndex = 0 }
+else {
+    $script:cmbIp.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+    $addressHint.Text = "No LAN address was detected automatically.`r`nEnter this PC's Wi-Fi/Ethernet IPv4 address."
+}
 $script:cmbIp.Add_SelectedIndexChanged({ Update-Status })
 $script:cmbIp.Add_Leave({ Update-Status })
 
@@ -595,8 +665,8 @@ $setupPanel.Controls.Add($step2)
 # Compatibility marker for legacy static check only: -Text 'Send to Phone'
 $step3 = New-UiCard -X 0 -Y 240 -Width 548 -Height 102
 [void](Add-CardTitle -Parent $step3 -Text '3. Android Setup' -Y 9)
-[void](Add-CardHelp -Parent $step3 -Text 'First setup or profile refresh: scan the current QR in SFA.' -Y 34 -Width 500 -Height 23)
-$script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 148 -Height 30 -Primary
+[void](Add-CardHelp -Parent $step3 -Text 'Required when Phone profile says Import needed. Scan the current QR in SFA.' -Y 34 -Width 500 -Height 23)
+$script:btnShare = New-UiButton -Text 'Start Phone Setup' -X 16 -Y 62 -Width 180 -Height 30 -Primary
 $script:btnShare.Add_Click({
     try { Start-ProfileShare }
     catch {
@@ -607,7 +677,7 @@ $script:btnShare.Add_Click({
     catch {
         Add-Log ('WARNING: phone setup is running, but the QR could not open: ' + $_.Exception.Message)
         [System.Windows.Forms.MessageBox]::Show(
-            "Phone setup is running, but the QR could not open.`r`n`r`nClick Copy SFA Link and send/open that link on your phone.",
+            "Phone setup is running, but the QR could not open.`r`n`r`nClick Copy SFA Link and open that link on your phone.",
             'Phone setup started',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -615,15 +685,12 @@ $script:btnShare.Add_Click({
     }
 })
 $step3.Controls.Add($script:btnShare)
-$script:btnQr = New-UiButton -Text 'Show SFA QR' -X 172 -Y 62 -Width 116 -Height 30
+$script:btnQr = New-UiButton -Text 'Show SFA QR' -X 204 -Y 62 -Width 150 -Height 30
 $script:btnQr.Add_Click({ try { Show-ShareQr } catch { Show-FriendlyError -Title 'Could not show SFA QR' -Exception $_.Exception } })
 $step3.Controls.Add($script:btnQr)
-$script:btnUrl = New-UiButton -Text 'Copy SFA Link' -X 296 -Y 62 -Width 116 -Height 30
+$script:btnUrl = New-UiButton -Text 'Copy SFA Link' -X 362 -Y 62 -Width 168 -Height 30
 $script:btnUrl.Add_Click({ try { Copy-ShareUrl } catch { Show-FriendlyError -Title 'Could not copy SFA link' -Exception $_.Exception } })
 $step3.Controls.Add($script:btnUrl)
-$script:btnFolder = New-UiButton -Text 'Profile File' -X 420 -Y 62 -Width 110 -Height 30
-$script:btnFolder.Add_Click({ try { Open-ProfileFolder } catch { Show-FriendlyError -Title 'Could not open profile file' -Exception $_.Exception } })
-$step3.Controls.Add($script:btnFolder)
 $setupPanel.Controls.Add($step3)
 
 $step4 = New-UiCard -X 0 -Y 352 -Width 548 -Height 70
@@ -642,15 +709,15 @@ $setupPanel.Controls.Add($step4)
 
 $step5 = New-UiCard -X 0 -Y 432 -Width 548 -Height 90
 [void](Add-CardTitle -Parent $step5 -Text '5. Start & Play' -Y 9)
-[void](Add-CardHelp -Parent $step5 -Text 'Run Check if needed. Then start the relay and play.' -Y 34 -Width 500 -Height 23)
+[void](Add-CardHelp -Parent $step5 -Text 'Run Check if needed. Start Relay guides you if phone setup is unfinished.' -Y 34 -Width 500 -Height 23)
 $script:btnPreflight = New-UiButton -Text 'Run Check' -X 16 -Y 57 -Width 105 -Height 27
 $script:btnPreflight.Add_Click({ try { Show-Preflight } catch { Show-FriendlyError -Title 'Check could not finish' -Exception $_.Exception } })
 $step5.Controls.Add($script:btnPreflight)
 $script:btnStart = New-UiButton -Text 'Start Relay' -X 129 -Y 57 -Width 134 -Height 27 -Primary
-$script:btnStart.Add_Click({ try { Start-Relay } catch { Show-FriendlyError -Title 'Could not start relay' -Exception $_.Exception } })
+$script:btnStart.Add_Click({ Invoke-StartRelayGuided })
 $step5.Controls.Add($script:btnStart)
 $script:btnStop = New-UiButton -Text 'Stop Relay' -X 271 -Y 57 -Width 108 -Height 27 -Danger
-$script:btnStop.Add_Click({ try { Stop-Relay } catch { Show-FriendlyError -Title 'Could not stop relay' -Exception $_.Exception } })
+$script:btnStop.Add_Click({ Invoke-StopRelayGuided })
 $step5.Controls.Add($script:btnStop)
 $setupPanel.Controls.Add($step5)
 
@@ -740,11 +807,11 @@ $btnCopyDps.Add_Click({ try { Copy-ZdpsSettings } catch { Show-FriendlyError -Ti
 $toolsCard.Controls.Add($btnCopyDps)
 
 $script:btnStopDetails = New-UiButton -Text 'Stop Relay' -X 280 -Y 32 -Width 108 -Height 31 -Danger
-$script:btnStopDetails.Add_Click({ try { Stop-Relay } catch { Show-FriendlyError -Title 'Could not stop relay' -Exception $_.Exception } })
+$script:btnStopDetails.Add_Click({ Invoke-StopRelayGuided })
 $toolsCard.Controls.Add($script:btnStopDetails)
 
 $script:btnRollback = New-UiButton -Text 'Restore Previous' -X 396 -Y 32 -Width 150 -Height 31
-$script:btnRollback.Add_Click({ try { Restore-PreviousRuntime } catch { Show-FriendlyError -Title 'Could not restore previous version' -Exception $_.Exception } })
+$script:btnRollback.Add_Click({ Invoke-RestorePreviousGuided })
 $toolsCard.Controls.Add($script:btnRollback)
 
 $btnFolderDetails = New-UiButton -Text 'Open Profile Folder' -X 554 -Y 32 -Width 150 -Height 31
@@ -792,7 +859,7 @@ $helpTab.Controls.Add($helpTitle)
 $androidHelp = New-UiCard -X 22 -Y 60 -Width 850 -Height 300
 [void](Add-CardTitle -Parent $androidHelp -Text 'Android - first setup' -Y 11)
 $androidLeft = New-Object System.Windows.Forms.Label
-$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same Wi-Fi.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. If an old test profile exists, remove it.`r`n`r`n6. PC: Start Phone Setup."
+$androidLeft.Text = "1. Install SFA on Android.`r`n`r`n2. Phone + PC: same home network/router.`r`n`r`n3. PC: Prepare Relay.`r`n`r`n4. PC: Allow Firewall.`r`n`r`n5. If an old test profile exists, remove it.`r`n`r`n6. PC: Start Phone Setup."
 $androidLeft.Location = New-Object System.Drawing.Point(16, 43)
 $androidLeft.Size = New-Object System.Drawing.Size(390, 240)
 $androidLeft.ForeColor = $Ui.Neutral
@@ -828,7 +895,7 @@ $helpTab.Controls.Add($meterHelp)
 $problemHelp = New-UiCard -X 566 -Y 374 -Width 306 -Height 138
 [void](Add-CardTitle -Parent $problemHelp -Text 'If something fails' -Y 11)
 $problemText = New-Object System.Windows.Forms.Label
-$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone issue: run Phone Setup, scan QR.`r`n`r`nNo DPS: StarSEA only."
+$problemText.Text = "Old relay: choose Yes to close.`r`n`r`nPhone profile says Import needed: run Phone Setup, scan QR.`r`n`r`nNo DPS: StarSEA only."
 $problemText.Location = New-Object System.Drawing.Point(16, 43)
 $problemText.Size = New-Object System.Drawing.Size(274, 90)
 $problemText.ForeColor = $Ui.Neutral
@@ -925,6 +992,13 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
     if ($targetValue.Text -ne 'StarSEA') { throw 'DPS target card changed unexpectedly.' }
+    if ($script:cmbIp.Items.Count -gt 0 -and $script:cmbIp.DropDownStyle -ne [System.Windows.Forms.ComboBoxStyle]::DropDownList) { throw 'Detected LAN addresses must use a non-editable selector.' }
+    $guidedStartSource = (Get-Command Invoke-StartRelayGuided -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($needle in @('Test-PhoneProfileConfirmed','Start-ProfileShare','Set-PhoneProfileConfirmed')) {
+        if (-not $guidedStartSource.Contains($needle)) { throw ('Guided start safety self-test failed: ' + $needle) }
+    }
+    $stopGuideSource = (Get-Command Invoke-StopRelayGuided -ErrorAction Stop).ScriptBlock.ToString()
+    if (-not $stopGuideSource.Contains('can interrupt the phone')) { throw 'Stop Relay confirmation guard is missing.' }
     $cleanupSource = (Get-Command Close-OldRelayPrompt -ErrorAction Stop).ScriptBlock.ToString()
     foreach ($needle in @('Get-ExpectedRelayPath -ProcessName','Test-ExpectedProcess -ProcessId ([int]$item.Id) -ExpectedPath $expectedPath -ExpectedStartUtc','same-named unrelated process must never be killed')) {
         if (-not $cleanupSource.Contains($needle)) { throw ('Stale-process safety self-test failed: ' + $needle) }
@@ -980,6 +1054,38 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     Write-Host 'UI SELF-TEST PASS: Home/Details/Help fit, Android baby steps and SFA QR actions present, labels fit, StarSEA target visible.'
     return
 }
+
+$form.Add_FormClosing({
+    param($sender, $eventArgs)
+    if (Get-RelayTrackedRunning) {
+        $choice = [System.Windows.Forms.MessageBox]::Show(
+            "The relay is still running.`r`n`r`nYes: close this window and KEEP the relay running.`r`nNo: STOP the relay, then close.`r`nCancel: keep this window open.",
+            'Relay is still running',
+            [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        if ($choice -eq [System.Windows.Forms.DialogResult]::Cancel) {
+            $eventArgs.Cancel = $true
+            return
+        }
+        if ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+            try { Stop-Relay }
+            catch {
+                Show-FriendlyError -Title 'Could not stop relay' -Exception $_.Exception
+                $eventArgs.Cancel = $true
+            }
+        }
+    }
+    elseif ($script:shareProcess) {
+        $choice = [System.Windows.Forms.MessageBox]::Show(
+            "Phone Setup is still open. Closing the manager will end the temporary setup link.`r`n`r`nClose anyway?",
+            'Phone Setup is active',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+        if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { $eventArgs.Cancel = $true }
+    }
+})
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 5000
