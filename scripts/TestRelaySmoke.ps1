@@ -51,6 +51,8 @@ $frontPassword = 'front-test-password'
 $internalUsername = 'internal'
 $internalPassword = 'internal-test-password'
 $profile = Join-Path $temp 'android-bpsr-relay.json'
+$profileMarker = Join-Path $temp 'phone-profile-state.json'
+$profileId = 'smoke-profile-id'
 $frontConfig = Join-Path $temp 'front.json'
 $backConfig = Join-Path $temp 'back.json'
 
@@ -117,7 +119,10 @@ try {
     $httpArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $serverScript + '"' +
                 ' -BindIp 127.0.0.1 -Port ' + $httpPort +
                 ' -Token ' + $token +
-                ' -ProfilePath "' + $profile + '" -LifetimeSeconds 60'
+                ' -ProfilePath "' + $profile + '"' +
+                ' -SuccessMarkerPath "' + $profileMarker + '"' +
+                ' -ProfileId ' + $profileId +
+                ' -LifetimeSeconds 60'
     $httpProcess = Start-Process powershell.exe -ArgumentList $httpArgs -WindowStyle Hidden -PassThru
     $backProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $backConfig + '"') -WindowStyle Hidden -PassThru
     $frontProcess = Start-Process -FilePath $SingBoxExe -ArgumentList ('run -c "' + $frontConfig + '"') -WindowStyle Hidden -PassThru
@@ -142,8 +147,15 @@ try {
     $httpProcess.WaitForExit(5000) | Out-Null
     $httpProcess.Refresh()
     if (-not $httpProcess.HasExited) { throw 'HTTP endpoint did not exit after the smoke-test download.' }
+    if (-not (Test-Path -LiteralPath $profileMarker -PathType Leaf)) {
+        throw 'Successful phone-profile download did not create its confirmation marker.'
+    }
+    $marker = Get-Content -LiteralPath $profileMarker -Raw | ConvertFrom-Json
+    if ([string]$marker.profileId -ne $profileId -or [string]$marker.reason -ne 'profile-downloaded') {
+        throw 'Phone-profile confirmation marker did not match the downloaded profile.'
+    }
 
-    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP listener readiness + TCP/UDP port availability; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
+    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP listener readiness + TCP/UDP port availability; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target; exact phone profile download confirmed.'
 }
 finally {
     foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {

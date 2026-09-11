@@ -31,6 +31,7 @@ $FrontConfig = Join-Path $ConfigDir 'pc-relay-front.json'
 $StarConfig = Join-Path $ConfigDir 'pc-relay-back.json'
 $AndroidConfig = Join-Path $OutputDir 'android-bpsr-relay.json'
 $ProfileMeta = Join-Path $OutputDir 'profile-meta.json'
+$PhoneProfileStateFile = Join-Path $Runtime 'phone-profile-state.json'
 $FirewallScript = Join-Path $Runtime 'allow-firewall.ps1'
 $ServerScript = Join-Path $PSScriptRoot 'ServeProfile.ps1'
 $LogFile = Join-Path $Runtime 'manager.log'
@@ -253,6 +254,55 @@ function Get-NetworkCategoryForIp {
     catch { return 'Unknown' }
 }
 
+function Get-CurrentPhoneProfileId {
+    try {
+        if (-not (Test-Path -LiteralPath $AndroidConfig -PathType Leaf)) { return '' }
+        $meta = Read-JsonFile -Path $ProfileMeta
+        if ($meta -and $meta.PSObject.Properties['profileId'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.profileId)) {
+            return [string]$meta.profileId
+        }
+        return (Get-FileHash -LiteralPath $AndroidConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    catch { return '' }
+}
+
+function Test-PhoneProfileConfirmed {
+    $profileId = Get-CurrentPhoneProfileId
+    if ([string]::IsNullOrWhiteSpace($profileId)) { return $false }
+    try {
+        $state = Read-JsonFile -Path $PhoneProfileStateFile
+        if ($state -and [string]$state.profileId -eq $profileId) { return $true }
+    }
+    catch {}
+
+    # Profiles from the previous stable build have no profileId metadata.
+    # Treat a valid legacy profile as already imported so an update does not
+    # force working users through phone setup again.
+    try {
+        $meta = Read-JsonFile -Path $ProfileMeta
+        if ($meta -and -not $meta.PSObject.Properties['profileId'] -and (Test-Path -LiteralPath $AndroidConfig -PathType Leaf)) {
+            return $true
+        }
+    }
+    catch {}
+    return $false
+}
+
+function Set-PhoneProfileConfirmed {
+    param([string]$Reason = 'confirmed')
+    $profileId = Get-CurrentPhoneProfileId
+    if ([string]::IsNullOrWhiteSpace($profileId)) { throw 'The current phone profile is missing or unreadable.' }
+    Write-JsonFile -Path $PhoneProfileStateFile -Value ([ordered]@{
+        profileId = $profileId
+        confirmedUtc = [DateTime]::UtcNow.ToString('o')
+        reason = $Reason
+    })
+}
+
+function Clear-PhoneProfileConfirmed {
+    Remove-Item -LiteralPath $PhoneProfileStateFile -Force -ErrorAction SilentlyContinue
+}
+
 function Get-InstalledVersion {
     if (-not (Test-Path -LiteralPath $VersionFile)) { return '' }
     return (Get-Content -LiteralPath $VersionFile -Raw).Trim()
@@ -418,6 +468,8 @@ function Write-RelayConfigs {
     param([string]$PcIp, $Credentials)
 
     Ensure-Directories
+    $previousProfileId = Get-CurrentPhoneProfileId
+    $previousProfileConfirmed = Test-PhoneProfileConfirmed
     $internalPort = Get-FreeInternalPort
 
     # v1.0.0 restores the transport shape from the user's original Clean v4 pack:
@@ -521,8 +573,10 @@ function Write-RelayConfigs {
     Write-JsonFile -Path $FrontConfig -Value $front
     Write-JsonFile -Path $StarConfig -Value $star
     Write-JsonFile -Path $AndroidConfig -Value $android
+    $profileId = (Get-FileHash -LiteralPath $AndroidConfig -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-JsonFile -Path $ProfileMeta -Value ([ordered]@{
         managerVersion = $ManagerVersion
+        profileId = $profileId
         pcIp = $PcIp
         relayPort = $FrontPort
         internalPort = $internalPort
@@ -530,6 +584,13 @@ function Write-RelayConfigs {
         testedSingBoxVersion = $TestedSingBoxVersion
         generatedUtc = [DateTime]::UtcNow.ToString('o')
     })
+
+    if ($previousProfileConfirmed -and -not [string]::IsNullOrWhiteSpace($previousProfileId) -and $previousProfileId -eq $profileId) {
+        Set-PhoneProfileConfirmed -Reason 'preserved-unchanged-profile'
+    }
+    else {
+        Clear-PhoneProfileConfirmed
+    }
 
     $importText = @"
 BPSR Android DPSMeter Relay
@@ -1402,6 +1463,8 @@ function Start-ProfileShare {
             ' -Port ' + $FrontPort +
             ' -Token ' + (Quote-Argument $token) +
             ' -ProfilePath ' + (Quote-Argument $AndroidConfig) +
+            ' -SuccessMarkerPath ' + (Quote-Argument $PhoneProfileStateFile) +
+            ' -ProfileId ' + (Quote-Argument (Get-CurrentPhoneProfileId)) +
             ' -LifetimeSeconds ' + $ShareLifetimeSeconds
 
     $script:shareProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
