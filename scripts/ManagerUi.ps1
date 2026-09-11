@@ -366,8 +366,15 @@ function Update-UiButtonStates {
 function Invoke-StartRelayGuided {
     try {
         if (-not (Test-PhoneProfileConfirmed)) {
+            $downloaded = Test-PhoneProfileDownloaded
+            $promptText = if ($downloaded) {
+                "The current profile was downloaded, but Windows cannot verify that SFA imported it.`r`n`r`nYes: open Phone Setup again.`r`nNo: I checked SFA and this exact current profile is imported; remember it and start.`r`nCancel: do nothing."
+            }
+            else {
+                "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.`r`n`r`nYes: open Phone Setup now (recommended).`r`nNo: I already imported this exact current profile; remember it and start.`r`nCancel: do nothing."
+            }
             $choice = [System.Windows.Forms.MessageBox]::Show(
-                "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.`r`n`r`nYes: open Phone Setup now (recommended).`r`nNo: I already imported this exact current profile; remember it and start.`r`nCancel: do nothing.",
+                $promptText,
                 'Finish phone setup first',
                 [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
                 [System.Windows.Forms.MessageBoxIcon]::Information
@@ -462,14 +469,19 @@ function Update-Status {
     $profileIp = Get-ProfilePcIp
     $profileReady = $false
     $phoneConfirmed = $false
+    $phoneDownloaded = $false
     if ([string]::IsNullOrWhiteSpace($profileIp)) {
         Set-UiStatusLabel -Label $script:lblProfileState -Text 'Missing' -State 'Error'
     }
     elseif ($profileIp -eq $selected -and (Test-LocalIpAssigned $selected)) {
         $profileReady = $true
         $phoneConfirmed = Test-PhoneProfileConfirmed
+        $phoneDownloaded = Test-PhoneProfileDownloaded
         if ($phoneConfirmed) {
             Set-UiStatusLabel -Label $script:lblProfileState -Text 'Ready' -State 'Ready'
+        }
+        elseif ($phoneDownloaded) {
+            Set-UiStatusLabel -Label $script:lblProfileState -Text 'Downloaded - confirm' -State 'Warning'
         }
         else {
             Set-UiStatusLabel -Label $script:lblProfileState -Text 'Import needed' -State 'Warning'
@@ -528,7 +540,10 @@ function Update-Status {
         }
     }
     elseif (-not $phoneConfirmed) {
-        if ($script:shareProcess) {
+        if ($phoneDownloaded) {
+            $script:lblNextAction.Text = 'Profile downloaded. Confirm it is imported in SFA, then click Start Relay.'
+        }
+        elseif ($script:shareProcess) {
             $script:lblNextAction.Text = 'Phone setup is open. Scan the QR and import BPSR Relay in SFA.'
         }
         else {

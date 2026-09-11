@@ -38,6 +38,7 @@ The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps n
 - The phone → PC hop uses **authenticated SOCKS5** but is not encrypted.
 - Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
 - Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
+- The SFA QR is generated locally on the PC; the setup payload is not sent to an external QR service.
 
 The relay does not modify BPSR game files.
 

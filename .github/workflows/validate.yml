@@ -37,7 +37,7 @@ jobs:
           }
           Write-Host 'PowerShell syntax OK.'
 
-      - name: Check v1.0.3 firewall topology and latency invariants
+      - name: Check relay security topology and latency invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
@@ -48,8 +48,17 @@ jobs:
           $release = Get-Content '.github\workflows\release.yml' -Raw
           $smoke = Get-Content 'scripts\TestRelaySmoke.ps1' -Raw
 
+          $versionMatch = [regex]::Match(
+            $text,
+            '^\$ManagerVersion\s*=\s*''([^'']+)''',
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+          )
+          if (-not $versionMatch.Success -or $versionMatch.Groups[1].Value -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw 'ManagerVersion is missing or invalid.'
+          }
+          $managerVersion = $versionMatch.Groups[1].Value
+
           $required = @(
-            "`$ManagerVersion = '1.0.3'",
             "`$TestedSingBoxVersion = 'v1.13.19'",
             '$FrontPort = 10808',
             '$InternalPortStart = 18080',
@@ -69,18 +78,21 @@ jobs:
             'function Assert-Topology',
             'function Get-RelayTrackedRunning',
             'function Start-ProfileShare',
+            'function Test-PhoneProfileDownloaded',
             "Join-Path `$Runtime 'BPSRMobileFront.exe'",
             "Join-Path `$Runtime 'StarSEA.exe'",
             "server = '127.0.0.1'",
             "final = 'bpsr-pc'",
             'route_exclude_address',
             "stack = 'system'",
+            "vendor\qrcode.min.js",
             'Universal DPS meter capture target: StarSEA',
             'Do not target BPSRMobileFront'
           )
           foreach ($needle in $required) {
-            if (-not $text.Contains($needle)) { throw ('Missing v1.0.3 invariant: ' + $needle) }
+            if (-not $text.Contains($needle)) { throw ('Missing relay invariant: ' + $needle) }
           }
+          if ($text.Contains('quickchart.io')) { throw 'External QR service was reintroduced.' }
 
           # The compatibility fix must never broaden the trusted-LAN firewall rule.
           foreach ($needle in @(
@@ -121,19 +133,19 @@ jobs:
           }
 
           if ($text.Contains('New-Object System.Windows.Forms.Form')) { throw 'UI was re-embedded into the relay engine.' }
-          foreach ($needle in @('BPSR_RELAY_UI_SELF_TEST','UI SELF-TEST PASS','PC Start Relay  ->  Phone Start SFA  ->  Open BPSR','Never BPSRMobileFront')) {
+          foreach ($needle in @('BPSR_RELAY_UI_SELF_TEST','UI SELF-TEST PASS','PC Start Relay  ->  Phone Start SFA  ->  Open BPSR','Never BPSRMobileFront','Downloaded - confirm')) {
             if (-not $ui.Contains($needle)) { throw ('UI invariant missing: ' + $needle) }
           }
-          foreach ($needle in @('DPS-meter agnostic','authenticated SOCKS5','trusted home/private LAN','BPSR Relay Manager.exe','Prepare Relay','Start Relay')) {
+          foreach ($needle in @('DPS-meter agnostic','authenticated SOCKS5','trusted home/private LAN','BPSR Relay Manager.exe','Prepare Relay','Start Relay','generated locally')) {
             if (-not $readme.Contains($needle)) { throw ('Documentation invariant missing: ' + $needle) }
           }
-          foreach ($needle in @('ProcessStartInfo','powershell.exe','--launcher-self-test','CreateNoWindow = true')) {
+          foreach ($needle in @('ProcessStartInfo','powershell.exe','--launcher-self-test','CreateNoWindow = true','AssemblyVersion("0.0.0.0")')) {
             if (-not $launcher.Contains($needle)) { throw ('Launcher invariant missing: ' + $needle) }
           }
           foreach ($forbidden in @('10808','sing-box','StarSEA.exe','BPSRMobileFront.exe')) {
             if ($launcher.Contains($forbidden)) { throw ('Launcher entered relay/network logic: ' + $forbidden) }
           }
-          foreach ($needle in @('BPSR Relay Manager.exe','/target:winexe','--launcher-self-test','must contain exactly one executable',"EntryPoint = 'BPSR Relay Manager.exe'")) {
+          foreach ($needle in @('BPSR Relay Manager.exe','/target:winexe','--launcher-self-test','must contain exactly one executable',"EntryPoint = 'BPSR Relay Manager.exe'",'launcherInfo.FileVersion','scripts\vendor\qrcode.min.js')) {
             if (-not $builder.Contains($needle)) { throw ('Package guard missing: ' + $needle) }
           }
           foreach ($needle in @('field_test_passed',"GITHUB_REF_NAME -ne 'main'",'Require green Validate run for exact commit','--commit $env:GITHUB_SHA','BuildRelease.ps1','gh release create','--latest')) {
@@ -143,7 +155,7 @@ jobs:
             if (-not $smoke.Contains($needle)) { throw ('Relay smoke guard missing: ' + $needle) }
           }
 
-          Write-Host 'Static v1.0.3 firewall/topology/latency/UI/package/release guards passed.'
+          Write-Host ('Static firewall/topology/latency/UI/package/release guards passed for manager v' + $managerVersion + '.')
 
       - name: Verify Windows TCP and UDP conflict detection primitives
         shell: powershell
@@ -212,7 +224,9 @@ jobs:
             'scripts\BPSRRelayManager.ps1',
             'scripts\LaunchManager.ps1',
             'scripts\ManagerUi.ps1',
-            'scripts\ServeProfile.ps1'
+            'scripts\ServeProfile.ps1',
+            'scripts\vendor\qrcode.min.js',
+            'scripts\vendor\LICENSE-qrcodejs.txt'
           )) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) { throw ('Package missing: ' + $relative) }
           }

@@ -47,6 +47,7 @@ $stageRoot = Join-Path $buildRoot 'release'
 $stage = Join-Path $stageRoot $packageBase
 $launcherBuildRoot = Join-Path $buildRoot 'launcher'
 $launcherExe = Join-Path $launcherBuildRoot 'BPSR Relay Manager.exe'
+$launcherCompileSource = Join-Path $launcherBuildRoot 'BPSRRelayManagerLauncher.cs'
 
 if ($Clean) {
     foreach ($path in @($OutputDirectory, $buildRoot)) {
@@ -65,6 +66,13 @@ if (Test-Path -LiteralPath $launcherBuildRoot) {
 }
 New-Item -ItemType Directory -Path $launcherBuildRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stage 'scripts\vendor') -Force | Out-Null
+
+$versionNumeric = (($version -split '-', 2)[0] + '.0')
+$launcherSource = Get-Content -LiteralPath $launcherSourcePath -Raw
+$launcherSource = $launcherSource.Replace('[assembly: AssemblyVersion("0.0.0.0")]', '[assembly: AssemblyVersion("' + $versionNumeric + '")]')
+$launcherSource = $launcherSource.Replace('[assembly: AssemblyFileVersion("0.0.0.0")]', '[assembly: AssemblyFileVersion("' + $versionNumeric + '")]')
+[System.IO.File]::WriteAllText($launcherCompileSource, $launcherSource, (New-Object System.Text.UTF8Encoding($false)))
 
 # Build a tiny managed WinExe launcher. It only starts the existing PowerShell GUI hidden;
 # it does not sit in the gameplay traffic path and does not bundle sing-box.
@@ -85,19 +93,23 @@ $compilerOutput = & $csc `
     '/reference:System.dll' `
     '/reference:System.Windows.Forms.dll' `
     ('/out:' + $launcherExe) `
-    $launcherSourcePath 2>&1
+    $launcherCompileSource 2>&1
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $launcherExe -PathType Leaf)) {
     throw ('Native launcher compilation failed: ' + (($compilerOutput | Out-String).Trim()))
 }
 
 Copy-Item -LiteralPath $launcherExe -Destination (Join-Path $stage 'BPSR Relay Manager.exe') -Force
+$launcherInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($launcherExe)
+if ([string]$launcherInfo.FileVersion -ne $versionNumeric) { throw ('Launcher file version mismatch: expected ' + $versionNumeric + ', got ' + $launcherInfo.FileVersion) }
 
 $files = @(
     @{ Source = 'README.md'; Destination = 'README.md' },
     @{ Source = 'scripts\LaunchManager.ps1'; Destination = 'scripts\LaunchManager.ps1' },
     @{ Source = 'scripts\BPSRRelayManager.ps1'; Destination = 'scripts\BPSRRelayManager.ps1' },
     @{ Source = 'scripts\ManagerUi.ps1'; Destination = 'scripts\ManagerUi.ps1' },
-    @{ Source = 'scripts\ServeProfile.ps1'; Destination = 'scripts\ServeProfile.ps1' }
+    @{ Source = 'scripts\ServeProfile.ps1'; Destination = 'scripts\ServeProfile.ps1' },
+    @{ Source = 'scripts\vendor\qrcode.min.js'; Destination = 'scripts\vendor\qrcode.min.js' },
+    @{ Source = 'scripts\vendor\LICENSE-qrcodejs.txt'; Destination = 'scripts\vendor\LICENSE-qrcodejs.txt' }
 )
 
 foreach ($file in $files) {
@@ -137,7 +149,9 @@ $requiredRelative = @(
     'scripts\LaunchManager.ps1',
     'scripts\BPSRRelayManager.ps1',
     'scripts\ManagerUi.ps1',
-    'scripts\ServeProfile.ps1'
+    'scripts\ServeProfile.ps1',
+    'scripts\vendor\qrcode.min.js',
+    'scripts\vendor\LICENSE-qrcodejs.txt'
 )
 foreach ($relative in $requiredRelative) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $relative) -PathType Leaf)) {
