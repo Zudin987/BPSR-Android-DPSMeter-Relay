@@ -1,0 +1,40 @@
+name: Fix daily card clipping
+
+on:
+  push:
+    branches:
+      - feat/ux-guided-misuse-guardrails
+    paths:
+      - .github/workflows/fix-ui-daily-copy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ux-guided-misuse-guardrails
+          fetch-depth: 0
+      - name: Remove redundant daily-use line
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/ManagerUi.ps1')
+          s = p.read_text(encoding='utf-8')
+          old = '$quickText.Text = "After the first setup:`r`nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR"'
+          new = '$quickText.Text = "PC Start Relay  ->  Phone Start SFA  ->  Open BPSR"'
+          if s.count(old) != 1:
+              raise SystemExit('daily-use copy anchor missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8', newline='\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-ui-daily-copy.yml
+          git add scripts/ManagerUi.ps1
+          git commit -m "Fix daily-use card text clipping"
+          git push origin HEAD:feat/ux-guided-misuse-guardrails
