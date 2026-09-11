@@ -35,7 +35,7 @@ The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps n
 
 - Use only on a **trusted home/private LAN**.
 - Do **not** port-forward relay port `10808` on your router.
-- The phone → PC SOCKS5 hop is authenticated but not encrypted.
+- The phone → PC hop uses **authenticated SOCKS5** but is not encrypted.
 - Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
 - Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
 
