@@ -1,0 +1,35 @@
+name: Apply relay reliability patch
+
+on:
+  push:
+    branches:
+      - fix/relay-reliability-health
+    paths:
+      - .relay-reliability.patch
+      - .github/workflows/apply-relay-reliability.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/relay-reliability-health
+          fetch-depth: 0
+
+      - name: Apply audited patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .relay-reliability.patch
+          git apply .relay-reliability.patch
+          rm -f .relay-reliability.patch .github/workflows/apply-relay-reliability.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden relay listener health and state writes"
+          git push origin HEAD:fix/relay-reliability-health
