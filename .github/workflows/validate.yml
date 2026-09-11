@@ -37,7 +37,7 @@ jobs:
           }
           Write-Host 'PowerShell syntax OK.'
 
-      - name: Check v1.0.2 firewall topology and latency invariants
+      - name: Check v1.0.3 firewall topology and latency invariants
         shell: powershell
         run: |
           $text = Get-Content 'scripts\BPSRRelayManager.ps1' -Raw
@@ -49,7 +49,7 @@ jobs:
           $smoke = Get-Content 'scripts\TestRelaySmoke.ps1' -Raw
 
           $required = @(
-            "`$ManagerVersion = '1.0.2'",
+            "`$ManagerVersion = '1.0.3'",
             "`$TestedSingBoxVersion = 'v1.13.19'",
             '$FrontPort = 10808',
             '$InternalPortStart = 18080',
@@ -79,7 +79,7 @@ jobs:
             'Do not target BPSRMobileFront'
           )
           foreach ($needle in $required) {
-            if (-not $text.Contains($needle)) { throw ('Missing v1.0.2 invariant: ' + $needle) }
+            if (-not $text.Contains($needle)) { throw ('Missing v1.0.3 invariant: ' + $needle) }
           }
 
           # The compatibility fix must never broaden the trusted-LAN firewall rule.
@@ -143,7 +143,7 @@ jobs:
             if (-not $smoke.Contains($needle)) { throw ('Relay smoke guard missing: ' + $needle) }
           }
 
-          Write-Host 'Static v1.0.2 firewall/topology/latency/UI/package/release guards passed.'
+          Write-Host 'Static v1.0.3 firewall/topology/latency/UI/package/release guards passed.'
 
       - name: Verify Windows TCP and UDP conflict detection primitives
         shell: powershell
