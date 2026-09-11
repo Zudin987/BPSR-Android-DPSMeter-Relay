@@ -928,7 +928,7 @@ $statusPanel.Controls.Add($nextCard)
 $quickCard = New-UiCard -X 0 -Y 339 -Width 316 -Height 88
 [void](Add-CardTitle -Parent $quickCard -Text 'Daily use' -Y 10)
 $quickText = New-Object System.Windows.Forms.Label
-$quickText.Text = "After the first setup:`r`nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR"
+$quickText.Text = "PC Start Relay  ->  Phone Start SFA  ->  Open BPSR"
 $quickText.Location = New-Object System.Drawing.Point(16, 43)
 $quickText.Size = New-Object System.Drawing.Size(284, 42)
 $quickText.ForeColor = $Ui.Neutral
