@@ -49,6 +49,6 @@ The relay does not modify BPSR game files.
 
 ## Troubleshooting
 
-Use **Details** for connection diagnostics and **Help** for the setup sequence. If the phone cannot connect, confirm the PC LAN address, private-network firewall rule and imported SFA profile. If the meter has no data, check that its capture target is **StarSEA**.
+Follow the blue **NEXT** step first; disabled buttons usually mean an earlier prerequisite is not ready yet. Use **Details** for connection diagnostics and **Help** for the setup sequence. If the phone cannot connect, confirm the PC LAN address, private-network firewall rule and imported SFA profile. If the meter has no data, check that its capture target is **StarSEA**.
 
 Include the relay version, PC/phone connection type and meter name in a bug report. Do not post the phone setup QR profile or relay credentials.
