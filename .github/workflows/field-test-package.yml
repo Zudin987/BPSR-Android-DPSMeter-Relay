@@ -1,0 +1,63 @@
+name: Field Test Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/field-test-package.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read manager version
+        id: version
+        shell: powershell
+        run: |
+          $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
+          $match = [regex]::Match(
+            $manager,
+            '^\$ManagerVersion\s*=\s*''([^'']+)''',
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+          )
+          if (-not $match.Success) { throw 'Could not read ManagerVersion.' }
+          $version = $match.Groups[1].Value.Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw ('Invalid ManagerVersion: ' + $version)
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host ('Preparing field-test package for v' + $version + '.')
+
+      - name: Build clean package
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $zip = Get-Item '.\dist\BPSR-Android-DPSMeter-Relay.zip'
+          $shaFile = Get-Item '.\dist\BPSR-Android-DPSMeter-Relay.zip.sha256'
+          if ($zip.Length -le 0 -or $shaFile.Length -le 0) { throw 'Field-test assets are empty.' }
+
+          $expected = ((Get-Content $shaFile.FullName -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw 'Field-test ZIP SHA256 mismatch.' }
+          Write-Host ('Field-test package verified. SHA256=' + $actual)
+
+      - name: Upload field-test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BPSR-Relay-v${{ steps.version.outputs.version }}-field-test
+          path: |
+            dist/BPSR-Android-DPSMeter-Relay.zip
+            dist/BPSR-Android-DPSMeter-Relay.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
