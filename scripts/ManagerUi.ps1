@@ -514,6 +514,18 @@ function Show-Preflight {
 
     $fails = @($checks | Where-Object { $_.State -eq 'FAIL' })
     $warnings = @($checks | Where-Object { $_.State -eq 'WARN' })
+    $phoneReady = Test-PhoneSetupConfirmed
+
+    if ($fails.Count -eq 0 -and -not $phoneReady) {
+        Add-Log '[WARN] Phone setup - Current SFA profile is not confirmed on this PC.'
+        [System.Windows.Forms.MessageBox]::Show(
+            "The PC side looks ready, but phone setup is not confirmed yet.`r`n`r`nIf the CURRENT profile is already imported in SFA and Per-app proxy is BPSR only, click Phone Ready.`r`n`r`nOtherwise click Set Up Phone first.",
+            'Phone setup still needed',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        return
+    }
 
     if ($fails.Count -eq 0) {
         $message = 'Everything important looks ready.'
@@ -521,7 +533,7 @@ function Show-Preflight {
             $message += "`r`n`r`nThere is a Windows network warning. If your phone cannot connect, click Allow Firewall again."
         }
         else {
-            $message += "`r`n`r`nYou can click Start Relay."
+            $message += "`r`n`r`nStart Relay on the PC first, then start SFA on the phone, then open BPSR."
         }
 
         [System.Windows.Forms.MessageBox]::Show(
@@ -538,13 +550,13 @@ function Show-Preflight {
         $message = "An old relay or another app is still using the relay.`r`n`r`nClose it or restart your PC."
     }
     elseif ($names -match 'LAN IP') {
-        $message = "This PC address is not ready.`r`n`r`nChoose the current address and try again."
+        $message = "This PC network is not ready.`r`n`r`nChoose the Wi-Fi/Ethernet connected to the same router/network as your phone."
     }
     elseif ($names -match 'Windows network profile|Firewall') {
         $message = "Your Windows network is not ready for the phone connection.`r`n`r`nClick Allow Firewall. If this is your trusted home/private network, approve changing it to Private."
     }
     else {
-        $message = "Setup is not ready yet.`r`n`r`nClick Prepare Relay, then run the check again."
+        $message = "Setup is not ready yet.`r`n`r`nFollow the blue NEXT step on Home, then run the check again."
     }
 
     [System.Windows.Forms.MessageBox]::Show(
@@ -898,7 +910,7 @@ $statusCard = New-UiCard -X 0 -Y 0 -Width 316 -Height 215
 [void](Add-CardTitle -Parent $statusCard -Text 'Status' -Y 10)
 $script:lblRelayState = New-StatusRow -Parent $statusCard -Title 'Relay' -Y 44
 $script:lblRuntimeState = New-StatusRow -Parent $statusCard -Title 'PC setup' -Y 78
-$script:lblProfileState = New-StatusRow -Parent $statusCard -Title 'Phone profile' -Y 112
+$script:lblProfileState = New-StatusRow -Parent $statusCard -Title 'SFA profile' -Y 112
 $script:lblFirewallState = New-StatusRow -Parent $statusCard -Title 'Firewall' -Y 146
 $script:lblPhoneState = New-StatusRow -Parent $statusCard -Title 'Phone setup' -Y 180
 $statusPanel.Controls.Add($statusCard)
@@ -1168,6 +1180,11 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($tabs.TabPages.Count -ne 3) { throw 'UI must contain exactly Home, Details, and Help tabs.' }
     if ($homeTab.Text -ne 'Home' -or $detailsTab.Text -ne 'Details' -or $helpTab.Text -ne 'Help') { throw 'Simple UI tab names changed unexpectedly.' }
     if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }
+    $preflightSource = (Get-Command Show-Preflight -ErrorAction Stop).ScriptBlock.ToString()
+    foreach ($guard in @('Test-PhoneSetupConfirmed','Phone setup still needed','Start Relay on the PC first')) {
+        if (-not $preflightSource.Contains($guard)) { throw ('Phone-aware preflight guard missing: ' + $guard) }
+    }
+
     if ($script:btnShare.Text -notin @('Set Up Phone','Re-import Phone') -or $script:btnQr.Text -ne 'Show SFA QR' -or $script:btnUrl.Text -ne 'Copy SFA Link' -or -not $script:btnPhoneReady) { throw 'SFA guided phone setup controls changed.' }
     if ($androidRight.Text -notmatch 'scan the QR' -or $androidRight.Text -notmatch 'Per-app proxy' -or $androidRight.Text -notmatch 'BPSR only') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
