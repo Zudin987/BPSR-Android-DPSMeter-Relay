@@ -1,0 +1,40 @@
+name: Fix troubleshooting card copy
+
+on:
+  push:
+    branches:
+      - feat/ux-guided-misuse-guardrails
+    paths:
+      - .github/workflows/fix-ui-troubleshooting-copy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ux-guided-misuse-guardrails
+          fetch-depth: 0
+      - name: Tighten troubleshooting copy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/ManagerUi.ps1')
+          s = p.read_text(encoding='utf-8')
+          old = '$problemText.Text = "Blue NEXT step = what to fix first.`r`n`r`nPhone issue: same Wi-Fi, then Set Up Phone.`r`n`r`nNo DPS: target StarSEA only."'
+          new = '$problemText.Text = "Blue NEXT = fix this first.`r`nPhone issue: same network, then Set Up Phone.`r`nNo DPS: target StarSEA only."'
+          if s.count(old) != 1:
+              raise SystemExit('troubleshooting copy anchor missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8', newline='\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-ui-troubleshooting-copy.yml
+          git add scripts/ManagerUi.ps1
+          git commit -m "Fix troubleshooting card text clipping"
+          git push origin HEAD:feat/ux-guided-misuse-guardrails
