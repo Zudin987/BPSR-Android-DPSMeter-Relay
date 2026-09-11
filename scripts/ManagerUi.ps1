@@ -619,7 +619,7 @@ $script:cmbIp.Size = New-Object System.Drawing.Size(218, 26)
 $script:cmbIp.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $addressCard.Controls.Add($script:cmbIp)
 $addressHint = New-Object System.Windows.Forms.Label
-$addressHint.Text = "Usually leave this as-is.`r`nPhone and PC must use the same home network/router."
+$addressHint.Text = "Usually leave this as-is.`r`nSame home network/router as your phone."
 $addressHint.Location = New-Object System.Drawing.Point(250, 30)
 $addressHint.Size = New-Object System.Drawing.Size(280, 34)
 $addressHint.ForeColor = $Ui.Muted
