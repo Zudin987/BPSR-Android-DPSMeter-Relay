@@ -20,11 +20,10 @@ function Get-FreeRelayPort {
     }
 }
 
-function Assert-RelayListeners {
+function Assert-RelayTcpListener {
     param([int]$ProcessId, [int]$Port, [string]$Label)
     $tcp = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
-    $udp = @(Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
-    if ($tcp.Count -eq 0 -or $udp.Count -eq 0) { throw ($Label + ' did not expose both TCP and UDP listeners on port ' + $Port + '.') }
+    if ($tcp.Count -eq 0) { throw ($Label + ' did not expose its TCP listener on port ' + $Port + '.') }
 }
 
 if (-not (Test-Path -LiteralPath $SingBoxExe -PathType Leaf)) {
@@ -128,8 +127,8 @@ try {
         $process.Refresh()
         if ($process.HasExited) { throw ('Smoke-test process exited early: PID ' + $process.Id) }
     }
-    Assert-RelayListeners -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
-    Assert-RelayListeners -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
+    Assert-RelayTcpListener -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
+    Assert-RelayTcpListener -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
 
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
@@ -144,7 +143,7 @@ try {
     $httpProcess.Refresh()
     if (-not $httpProcess.HasExited) { throw 'HTTP endpoint did not exit after the smoke-test download.' }
 
-    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP+UDP listener readiness; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
+    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP listener readiness + TCP/UDP port availability; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
 }
 finally {
     foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {

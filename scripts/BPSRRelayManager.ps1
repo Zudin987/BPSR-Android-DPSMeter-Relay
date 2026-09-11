@@ -981,27 +981,18 @@ function Get-ListeningUdpEndpoints {
     catch { return @() }
 }
 
-function Test-ProcessRelayListeners {
+function Test-ProcessRelayTcpListener {
     param(
         [int]$ProcessId,
         [string]$Address,
-        [int]$Port,
-        [switch]$TcpOnly
+        [int]$Port
     )
 
     if ($ProcessId -le 0 -or $Port -le 0) { return $false }
-    $tcpReady = @(Get-ListeningConnections -Port $Port | Where-Object {
+    return @(Get-ListeningConnections -Port $Port | Where-Object {
         [int]$_.OwningProcess -eq $ProcessId -and
         ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
     }).Count -gt 0
-    if (-not $tcpReady) { return $false }
-    if ($TcpOnly) { return $true }
-
-    $udpReady = @(Get-ListeningUdpEndpoints -Port $Port | Where-Object {
-        [int]$_.OwningProcess -eq $ProcessId -and
-        ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
-    }).Count -gt 0
-    return $udpReady
 }
 
 function Test-CachedRelayListenerHealth {
@@ -1017,11 +1008,11 @@ function Test-CachedRelayListenerHealth {
         return $false
     }
 
-    $frontOk = Test-ProcessRelayListeners -ProcessId $script:trackedFrontPid -Address $script:trackedPcIp -Port $FrontPort
-    $starOk = Test-ProcessRelayListeners -ProcessId $script:trackedStarPid -Address '127.0.0.1' -Port $script:trackedInternalPort
+    $frontOk = Test-ProcessRelayTcpListener -ProcessId $script:trackedFrontPid -Address $script:trackedPcIp -Port $FrontPort
+    $starOk = Test-ProcessRelayTcpListener -ProcessId $script:trackedStarPid -Address '127.0.0.1' -Port $script:trackedInternalPort
     $script:lastListenerHealthOk = $frontOk -and $starOk
     if ($script:lastListenerHealthOk) {
-        $script:lastListenerHealthDetail = 'TCP+UDP listeners healthy'
+        $script:lastListenerHealthDetail = 'TCP listeners healthy; UDP remains on-demand and port/firewall guarded'
     }
     else {
         $parts = @()
@@ -1054,8 +1045,7 @@ function Wait-ForProcessListener {
         [int]$ProcessId,
         [string]$Address,
         [int]$Port,
-        [string]$ProcessLabel,
-        [switch]$TcpOnly
+        [string]$ProcessLabel
     )
 
     for ($i = 0; $i -lt 50; $i++) {
@@ -1065,11 +1055,10 @@ function Wait-ForProcessListener {
         }
         catch { throw ($ProcessLabel + ' exited during startup.') }
 
-        if (Test-ProcessRelayListeners -ProcessId $ProcessId -Address $Address -Port $Port -TcpOnly:$TcpOnly) { return }
+        if (Test-ProcessRelayTcpListener -ProcessId $ProcessId -Address $Address -Port $Port) { return }
         Start-Sleep -Milliseconds 100
     }
-    $protocols = if ($TcpOnly) { 'TCP' } else { 'TCP+UDP' }
-    throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' for ' + $protocols + ' within 5 seconds.')
+    throw ($ProcessLabel + ' did not begin TCP listening on ' + $Address + ':' + $Port + ' within 5 seconds.')
 }
 
 
@@ -1417,7 +1406,7 @@ function Start-ProfileShare {
 
     $script:shareProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
     try {
-        Wait-ForProcessListener -ProcessId $script:shareProcess.Id -Address $pcIp -Port $FrontPort -ProcessLabel 'Phone setup server' -TcpOnly
+        Wait-ForProcessListener -ProcessId $script:shareProcess.Id -Address $pcIp -Port $FrontPort -ProcessLabel 'Phone setup server'
     }
     catch {
         if ($script:shareProcess) { Stop-Process -Id $script:shareProcess.Id -Force -ErrorAction SilentlyContinue }
@@ -1774,7 +1763,7 @@ BPSRMobileFront process count: $frontCount
 StarSEA process count: $starCount
 Legacy BPSRRelayIngress process count: $legacyCount
 Phone relay TCP listener: $listenerText
-Phone relay UDP listener: $udpListenerText
+Phone relay UDP endpoint (on-demand; none is normal): $udpListenerText
 Localhost StarSEA bridge port: $internalPortText
 Relay listener health: $($script:lastListenerHealthDetail)
 Topology: $topology
@@ -1818,8 +1807,8 @@ function Update-Status {
 
     if (-not $script:lblRelayState) { return }
 
-    # Gameplay hot path: once the tracked two-process relay is running, status polling must remain tiny.
-    # Do not hash the runtime, enumerate adapters, reread PID JSON, or resolve executable paths every timer tick.
+    # Gameplay hot path: PID/start-time checks stay tiny on every timer tick.
+    # Listener-table verification is cached for 10 seconds; never hash the runtime, enumerate adapters, reread PID JSON, or resolve executable paths every tick.
     if (Get-RelayTrackedRunning) {
         $script:lblRelayState.Text = 'Relay: RUNNING - v4-compatible path'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkGreen
