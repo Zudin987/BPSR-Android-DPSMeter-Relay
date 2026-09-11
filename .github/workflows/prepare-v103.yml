@@ -18,43 +18,22 @@ jobs:
         with:
           ref: release/v1.0.3
           fetch-depth: 0
-      - name: Bump stable patch metadata
+      - name: Bump stable source version
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
-          def replace_exact(path, old, new):
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one match for {old!r}, found {count}')
-              p.write_text(text.replace(old, new), encoding='utf-8')
-
-          replace_exact('scripts/BPSRRelayManager.ps1', "$ManagerVersion = '1.0.2'", "$ManagerVersion = '1.0.3'")
-
-          p = Path('.github/workflows/validate.yml')
+          p = Path('scripts/BPSRRelayManager.ps1')
           text = p.read_text(encoding='utf-8')
-          text = text.replace('Check v1.0.2 firewall topology and latency invariants', 'Check v1.0.3 firewall topology and latency invariants')
-          text = text.replace("`$ManagerVersion = '1.0.2'", "`$ManagerVersion = '1.0.3'")
-          text = text.replace('Missing v1.0.2 invariant:', 'Missing v1.0.3 invariant:')
-          text = text.replace('Static v1.0.2 firewall/topology/latency/UI/package/release guards passed.', 'Static v1.0.3 firewall/topology/latency/UI/package/release guards passed.')
-          if '1.0.2' in text:
-              raise SystemExit('validate.yml still contains stale 1.0.2 text')
-          p.write_text(text, encoding='utf-8')
-
-          p = Path('.github/workflows/release.yml')
-          text = p.read_text(encoding='utf-8')
-          text = text.replace("description: 'Stable version to publish (example: 1.0.1)'", "description: 'Stable version to publish (example: 1.0.3)'")
-          text = text.replace("default: '1.0.1'", "default: '1.0.3'")
-          p.write_text(text, encoding='utf-8')
+          old = "$ManagerVersion = '1.0.2'"
+          new = "$ManagerVersion = '1.0.3'"
+          if text.count(old) != 1:
+              raise SystemExit('Expected exactly one ManagerVersion 1.0.2 line')
+          p.write_text(text.replace(old, new), encoding='utf-8')
           PY
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/prepare-v103.yml
-          git add scripts/BPSRRelayManager.ps1 .github/workflows/validate.yml .github/workflows/release.yml
-          git commit -m "Prepare v1.0.3 release"
+          git add scripts/BPSRRelayManager.ps1
+          git commit -m "Bump relay manager to v1.0.3"
           git push origin HEAD:release/v1.0.3
