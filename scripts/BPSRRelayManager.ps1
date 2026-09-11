@@ -13,6 +13,7 @@ $InternalPortEnd = 18180
 $FirewallRuleName = 'BPSR Android DPSMeter Relay'
 $ShareLifetimeSeconds = 300
 $MaxLogBytes = 2097152
+$RelayListenerHealthIntervalSeconds = 10
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Runtime = Join-Path $Root '.runtime'
@@ -47,6 +48,11 @@ $script:trackedStarStartUtc = ''
 $script:trackedFrontPid = 0
 $script:trackedFrontStartUtc = ''
 $script:trackedRelayIdentityLoaded = $false
+$script:trackedPcIp = ''
+$script:trackedInternalPort = 0
+$script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+$script:lastListenerHealthOk = $false
+$script:lastListenerHealthDetail = 'not checked'
 
 function Ensure-Directories {
     foreach ($dir in @($Runtime, $OutputDir, $ConfigDir, $RollbackDir)) {
@@ -58,7 +64,34 @@ function Ensure-Directories {
 
 function Write-Utf8NoBom {
     param([string]$Path, [string]$Text)
-    [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    # Write state/config files through a same-directory temporary file so
+    # an interrupted write cannot leave half-written JSON or PID state.
+    $tempPath = $Path + '.tmp-' + [Guid]::NewGuid().ToString('N')
+    [System.IO.File]::WriteAllText($tempPath, $Text, $Utf8NoBom)
+    try {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            try {
+                [System.IO.File]::Replace($tempPath, $Path, $null, $true)
+            }
+            catch {
+                Move-Item -LiteralPath $tempPath -Destination $Path -Force
+            }
+        }
+        else {
+            [System.IO.File]::Move($tempPath, $Path)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Write-JsonFile {
@@ -501,9 +534,9 @@ function Write-RelayConfigs {
     $importText = @"
 BPSR Android DPSMeter Relay
 
-IMPORTANT FOR v1.0.2-rc.1:
+IMPORTANT FOR v1.0.2:
 If upgrading from an older test build, remove its old BPSR Relay profile and import this newly generated profile.
-v1.0.2-rc.1 keeps the field-tested Clean v4 routing shape unchanged.
+v1.0.2 keeps the field-tested Clean v4 routing shape unchanged.
 
 PC LAN IPv4 in this profile: $PcIp
 Phone relay port: $FrontPort
@@ -722,6 +755,22 @@ function Load-TrackedRelayIdentity {
         $script:trackedStarStartUtc = $starStart
         $script:trackedFrontPid = $frontPid
         $script:trackedFrontStartUtc = $frontStart
+        $script:trackedPcIp = [string]$state.pcIp
+        $script:trackedInternalPort = if ($state.PSObject.Properties['internalPort']) { [int]$state.internalPort } else { 0 }
+        if ($script:trackedInternalPort -le 0) {
+            try {
+                $starConfigObject = Read-JsonFile -Path $StarConfig
+                $starInbound = @($starConfigObject.inbounds | Select-Object -First 1)[0]
+                if ($starInbound) { $script:trackedInternalPort = [int]$starInbound.listen_port }
+            }
+            catch { $script:trackedInternalPort = 0 }
+        }
+        if ([string]::IsNullOrWhiteSpace($script:trackedPcIp)) {
+            $script:trackedPcIp = Get-ProfilePcIp
+        }
+        $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+        $script:lastListenerHealthOk = $true
+        $script:lastListenerHealthDetail = 'pending listener verification'
     }
 }
 
@@ -730,13 +779,20 @@ function Set-TrackedRelayIdentity {
         [int]$StarProcessId,
         [string]$StarStartUtc,
         [int]$FrontProcessId,
-        [string]$FrontStartUtc
+        [string]$FrontStartUtc,
+        [string]$PcIp = '',
+        [int]$InternalPort = 0
     )
     $script:trackedStarPid = $StarProcessId
     $script:trackedStarStartUtc = $StarStartUtc
     $script:trackedFrontPid = $FrontProcessId
     $script:trackedFrontStartUtc = $FrontStartUtc
     $script:trackedRelayIdentityLoaded = $true
+    $script:trackedPcIp = $PcIp
+    $script:trackedInternalPort = $InternalPort
+    $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+    $script:lastListenerHealthOk = $true
+    $script:lastListenerHealthDetail = 'pending listener verification'
 }
 
 function Clear-TrackedRelayIdentity {
@@ -745,6 +801,11 @@ function Clear-TrackedRelayIdentity {
     $script:trackedFrontPid = 0
     $script:trackedFrontStartUtc = ''
     $script:trackedRelayIdentityLoaded = $true
+    $script:trackedPcIp = ''
+    $script:trackedInternalPort = 0
+    $script:lastListenerHealthCheckUtc = [DateTime]::MinValue
+    $script:lastListenerHealthOk = $false
+    $script:lastListenerHealthDetail = 'not running'
 }
 
 function Get-ProcessPath {
@@ -920,6 +981,57 @@ function Get-ListeningUdpEndpoints {
     catch { return @() }
 }
 
+function Test-ProcessRelayListeners {
+    param(
+        [int]$ProcessId,
+        [string]$Address,
+        [int]$Port,
+        [switch]$TcpOnly
+    )
+
+    if ($ProcessId -le 0 -or $Port -le 0) { return $false }
+    $tcpReady = @(Get-ListeningConnections -Port $Port | Where-Object {
+        [int]$_.OwningProcess -eq $ProcessId -and
+        ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
+    }).Count -gt 0
+    if (-not $tcpReady) { return $false }
+    if ($TcpOnly) { return $true }
+
+    $udpReady = @(Get-ListeningUdpEndpoints -Port $Port | Where-Object {
+        [int]$_.OwningProcess -eq $ProcessId -and
+        ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
+    }).Count -gt 0
+    return $udpReady
+}
+
+function Test-CachedRelayListenerHealth {
+    $now = [DateTime]::UtcNow
+    if (($now - $script:lastListenerHealthCheckUtc).TotalSeconds -lt $RelayListenerHealthIntervalSeconds) {
+        return $script:lastListenerHealthOk
+    }
+
+    $script:lastListenerHealthCheckUtc = $now
+    if ([string]::IsNullOrWhiteSpace($script:trackedPcIp) -or $script:trackedInternalPort -le 0) {
+        $script:lastListenerHealthOk = $false
+        $script:lastListenerHealthDetail = 'tracked relay ports are unavailable'
+        return $false
+    }
+
+    $frontOk = Test-ProcessRelayListeners -ProcessId $script:trackedFrontPid -Address $script:trackedPcIp -Port $FrontPort
+    $starOk = Test-ProcessRelayListeners -ProcessId $script:trackedStarPid -Address '127.0.0.1' -Port $script:trackedInternalPort
+    $script:lastListenerHealthOk = $frontOk -and $starOk
+    if ($script:lastListenerHealthOk) {
+        $script:lastListenerHealthDetail = 'TCP+UDP listeners healthy'
+    }
+    else {
+        $parts = @()
+        if (-not $frontOk) { $parts += 'BPSRMobileFront listener missing' }
+        if (-not $starOk) { $parts += 'StarSEA listener missing' }
+        $script:lastListenerHealthDetail = ($parts -join '; ')
+    }
+    return $script:lastListenerHealthOk
+}
+
 function Assert-RelayPortFree {
     $tcp = @(Get-ListeningConnections -Port $FrontPort)
     $udp = @(Get-ListeningUdpEndpoints -Port $FrontPort)
@@ -942,24 +1054,22 @@ function Wait-ForProcessListener {
         [int]$ProcessId,
         [string]$Address,
         [int]$Port,
-        [string]$ProcessLabel
+        [string]$ProcessLabel,
+        [switch]$TcpOnly
     )
 
-    for ($i = 0; $i -lt 40; $i++) {
+    for ($i = 0; $i -lt 50; $i++) {
         try {
             $process = Get-Process -Id $ProcessId -ErrorAction Stop
             if ($process.HasExited) { throw ($ProcessLabel + ' exited during startup.') }
         }
         catch { throw ($ProcessLabel + ' exited during startup.') }
 
-        $listeners = @(Get-ListeningConnections -Port $Port | Where-Object {
-            [int]$_.OwningProcess -eq $ProcessId -and
-            ([string]$_.LocalAddress -eq $Address -or [string]$_.LocalAddress -eq '0.0.0.0')
-        })
-        if ($listeners.Count -gt 0) { return }
+        if (Test-ProcessRelayListeners -ProcessId $ProcessId -Address $Address -Port $Port -TcpOnly:$TcpOnly) { return }
         Start-Sleep -Milliseconds 100
     }
-    throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' within 4 seconds.')
+    $protocols = if ($TcpOnly) { 'TCP' } else { 'TCP+UDP' }
+    throw ($ProcessLabel + ' did not begin listening on ' + $Address + ':' + $Port + ' for ' + $protocols + ' within 5 seconds.')
 }
 
 
@@ -1156,8 +1266,8 @@ function Setup-Relay {
     Write-RelayConfigs -PcIp $pcIp -Credentials $credentials
     Validate-GeneratedConfigs -PcIp $pcIp
 
-    Add-Log 'Setup / Repair complete. v1.0.2-rc.1 keeps the original Clean v4 two-stage SOCKS5 route.'
-    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.2-rc.1 profile.'
+    Add-Log 'Setup / Repair complete. v1.0.2 keeps the original Clean v4 two-stage SOCKS5 route.'
+    Add-Log 'If upgrading from an older test build, remove its old SFA profile and import the newly generated v1.0.2 profile.'
     Add-Log 'Next: Allow Firewall -> Send to Phone -> SFA BPSR-only per-app proxy -> DPS target StarSEA -> Start Relay.'
     Update-Status
 }
@@ -1269,9 +1379,18 @@ function Get-RelayTrackedRunning {
 
         $starMatches = [Math]::Abs(($starActual - $starExpected).TotalSeconds) -le 2
         $frontMatches = [Math]::Abs(($frontActual - $frontExpected).TotalSeconds) -le 2
-        return $starMatches -and $frontMatches
+        if (-not ($starMatches -and $frontMatches)) {
+            $script:lastListenerHealthOk = $false
+            $script:lastListenerHealthDetail = 'tracked process identity changed or exited'
+            return $false
+        }
+        return (Test-CachedRelayListenerHealth)
     }
-    catch { return $false }
+    catch {
+        $script:lastListenerHealthOk = $false
+        $script:lastListenerHealthDetail = 'tracked relay process exited'
+        return $false
+    }
 }
 
 function Start-ProfileShare {
@@ -1285,6 +1404,7 @@ function Start-ProfileShare {
     }
 
     Stop-ProfileShare
+    Stop-Relay
     Assert-NoForeignRelayProcesses
     Assert-RelayPortFree
     $token = New-ShareToken
@@ -1296,11 +1416,13 @@ function Start-ProfileShare {
             ' -LifetimeSeconds ' + $ShareLifetimeSeconds
 
     $script:shareProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
-    Start-Sleep -Milliseconds 250
-    $script:shareProcess.Refresh()
-    if ($script:shareProcess.HasExited) {
+    try {
+        Wait-ForProcessListener -ProcessId $script:shareProcess.Id -Address $pcIp -Port $FrontPort -ProcessLabel 'Phone setup server' -TcpOnly
+    }
+    catch {
+        if ($script:shareProcess) { Stop-Process -Id $script:shareProcess.Id -Force -ErrorAction SilentlyContinue }
         $script:shareProcess = $null
-        throw 'Temporary phone sharing server could not start. Check that the relay port is free and the firewall rule exists.'
+        throw
     }
 
     $script:shareUrl = 'http://' + $pcIp + ':' + $FrontPort + '/' + $token + '/'
@@ -1410,10 +1532,10 @@ function Get-PreflightChecks {
 
     $profileIp = Get-ProfilePcIp
     if ($profileIp -eq $PcIp) {
-        Add-CheckLocal 'Android profile' 'OK' ('v1.0.2-rc.1 v4-compatible profile matches ' + $PcIp)
+        Add-CheckLocal 'Android profile' 'OK' ('v1.0.2 v4-compatible profile matches ' + $PcIp)
     }
     elseif ([string]::IsNullOrWhiteSpace($profileIp)) {
-        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.2-rc.1 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
+        Add-CheckLocal 'Android profile' 'FAIL' 'v1.0.2 profile is not generated. Click Prepare Relay, then import the new profile into SFA.'
     }
     else {
         Add-CheckLocal 'Android profile' 'FAIL' ('Stale: profile=' + $profileIp + ', selected=' + $PcIp)
@@ -1496,7 +1618,7 @@ function Start-Relay {
     Stop-ProfileShare
 
     if (Get-RelayTrackedRunning) {
-        Add-Log 'v1.0.2-rc.1 two-stage relay is already running.'
+        Add-Log 'v1.0.2 two-stage relay is already running.'
         Update-Status
         return
     }
@@ -1543,13 +1665,16 @@ function Start-Relay {
             starPath = $StarExe
             frontPath = $FrontExe
             pcIp = $pcIp
+            internalPort = $internalPort
             startedUtc = [DateTime]::UtcNow.ToString('o')
         })
         Set-TrackedRelayIdentity `
             -StarProcessId $starProcess.Id `
             -StarStartUtc $starStartUtc `
             -FrontProcessId $frontProcess.Id `
-            -FrontStartUtc $frontStartUtc
+            -FrontStartUtc $frontStartUtc `
+            -PcIp $pcIp `
+            -InternalPort $internalPort
 
         Add-Log ('Relay RUNNING: Android -> BPSRMobileFront PID ' + $frontProcess.Id +
                  ' -> localhost -> StarSEA PID ' + $starProcess.Id + ' -> game server.')
@@ -1579,11 +1704,18 @@ function Get-DiagnosticsText {
     $frontCount = @(Get-Process -Name 'BPSRMobileFront' -ErrorAction SilentlyContinue).Count
     $legacyCount = @(Get-Process -Name 'BPSRRelayIngress' -ErrorAction SilentlyContinue).Count
     $listeners = @(Get-ListeningConnections -Port $FrontPort)
+    $udpListeners = @(Get-ListeningUdpEndpoints -Port $FrontPort)
     $listenerText = if ($listeners.Count -eq 0) {
         'none'
     }
     else {
         (($listeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
+    }
+    $udpListenerText = if ($udpListeners.Count -eq 0) {
+        'none'
+    }
+    else {
+        (($udpListeners | ForEach-Object { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess }) -join '; ')
     }
 
     $internalPortText = 'unknown'
@@ -1642,10 +1774,12 @@ BPSRMobileFront process count: $frontCount
 StarSEA process count: $starCount
 Legacy BPSRRelayIngress process count: $legacyCount
 Phone relay TCP listener: $listenerText
+Phone relay UDP listener: $udpListenerText
 Localhost StarSEA bridge port: $internalPortText
+Relay listener health: $($script:lastListenerHealthDetail)
 Topology: $topology
 Ingress transport: authenticated SOCKS5 on trusted Private LAN
-Phone-to-PC encryption: DISABLED in v1.0.2-rc.1 compatibility mode
+Phone-to-PC encryption: DISABLED in v1.0.2 compatibility mode
 Android protocol sniffing: DISABLED
 Android selected-app route: all BPSR app traffic -> BPSRMobileFront -> localhost StarSEA -> game server
 Multiplexing: DISABLED
@@ -1692,7 +1826,27 @@ function Update-Status {
         return
     }
 
-    if (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
+    $trackedDegraded = ($script:trackedStarPid -gt 0 -or $script:trackedFrontPid -gt 0)
+    if (-not $trackedDegraded) {
+        $recorded = Get-RecordedPids
+        if ($recorded) {
+            $starRemaining = $false
+            $frontRemaining = $false
+            if ($recorded.starPid) {
+                $starRemaining = Test-ExpectedProcess -ProcessId ([int]$recorded.starPid) -ExpectedPath $StarExe -ExpectedStartUtc ([string]$recorded.starStartUtc)
+            }
+            if ($recorded.frontPid) {
+                $frontRemaining = Test-ExpectedProcess -ProcessId ([int]$recorded.frontPid) -ExpectedPath $FrontExe -ExpectedStartUtc ([string]$recorded.frontStartUtc)
+            }
+            $trackedDegraded = $starRemaining -or $frontRemaining
+        }
+    }
+
+    if ($trackedDegraded) {
+        $script:lblRelayState.Text = 'Relay: DEGRADED - click Start Relay to repair'
+        $script:lblRelayState.ForeColor = [System.Drawing.Color]::DarkOrange
+    }
+    elseif (@(Get-Process -Name 'StarSEA','BPSRMobileFront','BPSRRelayIngress' -ErrorAction SilentlyContinue).Count -gt 0) {
         $script:lblRelayState.Text = 'Relay: FOREIGN / DUPLICATE PROCESS DETECTED'
         $script:lblRelayState.ForeColor = [System.Drawing.Color]::Firebrick
     }
