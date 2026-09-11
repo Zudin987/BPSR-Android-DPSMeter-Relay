@@ -27,7 +27,7 @@ Daily use is normally just:
 
 ## Compatibility
 
-The relay forwards game traffic; it does not calculate DPS itself. Use a meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
+The relay is **DPS-meter agnostic**: it forwards game traffic and does not calculate DPS itself. Use any compatible Windows meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
 
 The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps normal setup on **Home**, troubleshooting on **Details**, and simple instructions on **Help**. The main actions include **Prepare Relay** and **Start Relay**.
 
@@ -35,7 +35,7 @@ The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps n
 
 - Use only on a **trusted home/private LAN**.
 - Do **not** port-forward relay port `10808` on your router.
-- The phone → PC SOCKS5 hop is authenticated but not encrypted.
+- The phone → PC hop uses **authenticated SOCKS5** but is not encrypted.
 - Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
 - Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
 

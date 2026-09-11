@@ -4,13 +4,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Get-FreeTcpPort {
+function Get-FreeRelayPort {
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $udp = $null
     try {
         $listener.Start()
-        return [int]$listener.LocalEndpoint.Port
+        $port = [int]$listener.LocalEndpoint.Port
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Loopback, $port)))
+        return $port
     }
-    finally { $listener.Stop() }
+    finally {
+        if ($udp) { $udp.Dispose() }
+        $listener.Stop()
+    }
+}
+
+function Assert-RelayTcpListener {
+    param([int]$ProcessId, [int]$Port, [string]$Label)
+    $tcp = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
+    if ($tcp.Count -eq 0) { throw ($Label + ' did not expose its TCP listener on port ' + $Port + '.') }
 }
 
 if (-not (Test-Path -LiteralPath $SingBoxExe -PathType Leaf)) {
@@ -27,7 +40,7 @@ $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('bpsr-relay-smoke-' + [Guid
 New-Item -ItemType Directory -Path $temp -Force | Out-Null
 
 $ports = New-Object System.Collections.Generic.HashSet[int]
-while ($ports.Count -lt 3) { [void]$ports.Add((Get-FreeTcpPort)) }
+while ($ports.Count -lt 3) { [void]$ports.Add((Get-FreeRelayPort)) }
 $portList = @($ports)
 $httpPort = $portList[0]
 $frontPort = $portList[1]
@@ -114,6 +127,8 @@ try {
         $process.Refresh()
         if ($process.HasExited) { throw ('Smoke-test process exited early: PID ' + $process.Id) }
     }
+    Assert-RelayTcpListener -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
+    Assert-RelayTcpListener -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
 
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
@@ -128,7 +143,7 @@ try {
     $httpProcess.Refresh()
     if (-not $httpProcess.HasExited) { throw 'HTTP endpoint did not exit after the smoke-test download.' }
 
-    Write-Host 'V4-COMPAT RELAY SMOKE PASS: SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
+    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP listener readiness + TCP/UDP port availability; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target.'
 }
 finally {
     foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {
