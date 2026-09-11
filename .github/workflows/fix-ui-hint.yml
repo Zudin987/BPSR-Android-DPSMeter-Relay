@@ -1,0 +1,39 @@
+name: Fix UI hint clipping
+
+on:
+  push:
+    branches:
+      - feat/uiux-guided-safe-flow
+    paths:
+      - .github/workflows/fix-ui-hint.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/uiux-guided-safe-flow
+      - name: Shorten PC network hint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/ManagerUi.ps1')
+          s = p.read_text(encoding='utf-8')
+          old = 'Usually leave this as-is.`r`nPhone and PC must use the same home network/router.'
+          new = 'Usually leave this as-is.`r`nSame home network/router as your phone.'
+          if s.count(old) != 1:
+              raise SystemExit('expected one address hint')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-ui-hint.yml
+          git add scripts/ManagerUi.ps1
+          git commit -m "Fit guided network hint without clipping"
+          git push origin HEAD:feat/uiux-guided-safe-flow
