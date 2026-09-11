@@ -31,5 +31,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scripts/ManagerUi.ps1 scripts/BPSRRelayManager.ps1 README.md
           git diff --cached --quiet && { echo "No UX changes generated"; exit 1; }
-          git commit -m "Guide relay setup and prevent common misuse"
+          git commit -m "Align readiness checks with guided phone setup"
           git push origin HEAD:feat/ux-guided-misuse-guardrails
