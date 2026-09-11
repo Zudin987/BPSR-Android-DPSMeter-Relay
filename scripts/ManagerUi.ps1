@@ -344,15 +344,15 @@ function Update-AddressHint {
     if (-not $script:lblAddressHint) { return }
     $selected = Get-UiSelectedIp
     if ([string]::IsNullOrWhiteSpace($selected)) {
-        $script:lblAddressHint.Text = "Choose the PC network shared with your phone.`r`nUsually Wi-Fi or Ethernet."
+        $script:lblAddressHint.Text = "Phone + PC: same router/network.`r`nChoose Wi-Fi or Ethernet."
         return
     }
     $adapter = Get-InterfaceForIp -Address $selected
     if ($adapter) {
-        $script:lblAddressHint.Text = ([string]$adapter.Interface) + "  -  " + $selected + "`r`nPhone must be on the same router/network."
+        $script:lblAddressHint.Text = ([string]$adapter.Interface) + "  -  " + $selected + "`r`nPhone must use the same router/network."
     }
     else {
-        $script:lblAddressHint.Text = $selected + "`r`nPhone must be on the same router/network."
+        $script:lblAddressHint.Text = $selected + "`r`nPhone must use the same router/network."
     }
 }
 
@@ -795,7 +795,7 @@ $script:cmbIp.DisplayMember = 'Display'
 $script:cmbIp.ValueMember = 'IP'
 $addressCard.Controls.Add($script:cmbIp)
 $addressHint = New-Object System.Windows.Forms.Label
-$addressHint.Text = "Choose the PC network shared with your phone.`r`nUsually Wi-Fi or Ethernet."
+$addressHint.Text = "Phone + PC: same router/network.`r`nChoose Wi-Fi or Ethernet."
 $addressHint.Location = New-Object System.Drawing.Point(250, 30)
 $addressHint.Size = New-Object System.Drawing.Size(280, 34)
 $addressHint.ForeColor = $Ui.Muted
