@@ -224,9 +224,18 @@ function Test-LocalIpAssigned {
 
 function Get-SelectedIp {
     if (-not $script:cmbIp) { throw 'No IP selector is available.' }
-    $value = ([string]$script:cmbIp.Text).Trim()
+
+    $value = ''
+    $selectedItem = $script:cmbIp.SelectedItem
+    if ($selectedItem -and $selectedItem.PSObject.Properties['IP']) {
+        $value = ([string]$selectedItem.IP).Trim()
+    }
+    else {
+        $value = ([string]$script:cmbIp.Text).Trim()
+    }
+
     if (-not (Test-IPv4Address $value)) {
-        throw 'Choose or type a valid PC LAN IPv4 address, for example 192.168.1.20.'
+        throw 'Choose the PC Wi-Fi/Ethernet address that is on the same home network as your phone.'
     }
     if ($value -eq '127.0.0.1' -or $value -like '169.254.*') {
         throw 'Choose the PC Wi-Fi/Ethernet LAN IPv4 that the phone can reach.'

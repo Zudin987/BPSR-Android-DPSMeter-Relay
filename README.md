@@ -16,14 +16,16 @@ Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
 1. [Download the latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip).
 2. Extract the whole ZIP and run `BPSR Relay Manager.exe`.
 3. Select the PC Ethernet/Wi-Fi address connected to the same router as the phone.
-4. Click **Prepare Relay** → **Allow Firewall** → **Start Phone Setup**.
-5. In Android SFA, scan/import the QR profile and route **BPSR only** through it.
-6. Click **Start Relay** on the PC, start SFA on the phone, then open BPSR.
+4. Follow the blue **NEXT** action: **Prepare Relay** → **Allow Firewall** → **Set Up Phone**.
+5. In Android SFA, import the current QR profile, enable per-app proxy, and select **BPSR only**. Back on the PC, click **Phone Ready** to confirm those two phone-side steps.
+6. Click **Start Relay** on the PC first, then start SFA on the phone, then open BPSR.
 7. In your compatible DPS meter, use **StarSEA** as the BPSR capture/process target.
 
 Daily use is normally just:
 
 **PC Start Relay → Android Start SFA → Open BPSR**
+
+The manager remembers confirmation for the current SFA profile. If the PC IP/profile changes, it asks you to re-import/confirm instead of silently assuming the old phone setup is still valid.
 
 ## Compatibility
 
@@ -37,7 +39,9 @@ The release is **EXE-first**: open `BPSR Relay Manager.exe`. The manager keeps n
 - Do **not** port-forward relay port `10808` on your router.
 - The phone → PC hop uses **authenticated SOCKS5** but is not encrypted.
 - Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
-- Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
+- Re-run phone setup if your PC LAN IP/profile changes or the manager says the phone is not confirmed.
+- Closing the manager while the relay is active asks whether to stop it or intentionally keep it running.
+- Do not share the generated JSON profile, QR code, setup link, or relay credentials.
 
 The relay does not modify BPSR game files.
 
