@@ -1,0 +1,27 @@
+name: Dispatch v1.0.5 Release Once
+
+on:
+  push:
+    branches:
+      - release/v1.0.5
+    paths:
+      - .github/workflows/dispatch-v105-release-once.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch stable release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f version=1.0.5 \
+            -f field_test_passed=YES
