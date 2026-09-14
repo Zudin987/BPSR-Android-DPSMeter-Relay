@@ -38,12 +38,8 @@ namespace BpsrRelayManagerLauncher
                     throw new FileNotFoundException("scripts\\BPSRRelayManager.ps1 is missing. Re-extract the complete release ZIP.", managerScript);
                 }
 
-                // CI/package probe: validate the EXE and packaged layout without opening the UI.
-                if (args != null && args.Length == 1 &&
-                    string.Equals(args[0], "--launcher-self-test", StringComparison.OrdinalIgnoreCase))
-                {
-                    return 0;
-                }
+                bool selfTest = args != null && args.Length == 1 &&
+                    string.Equals(args[0], "--launcher-self-test", StringComparison.OrdinalIgnoreCase);
 
                 string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
                 string powershell = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -62,13 +58,35 @@ namespace BpsrRelayManagerLauncher
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
 
+                // CI/package probe: run the real launcher script in UI self-test mode.
+                // This validates the packaged layout plus tray/single-instance bootstrap
+                // without opening the normal manager window or starting the relay.
+                if (selfTest)
+                {
+                    startInfo.EnvironmentVariables["BPSR_RELAY_UI_SELF_TEST"] = "1";
+                }
+
                 Process process = Process.Start(startInfo);
                 if (process == null)
                 {
                     throw new InvalidOperationException("Windows could not start the manager process.");
                 }
 
-                return 0;
+                if (!selfTest)
+                {
+                    return 0;
+                }
+
+                using (process)
+                {
+                    if (!process.WaitForExit(45000))
+                    {
+                        try { process.Kill(); }
+                        catch { }
+                        throw new TimeoutException("Packaged launcher self-test timed out.");
+                    }
+                    return process.ExitCode;
+                }
             }
             catch (Exception ex)
             {
