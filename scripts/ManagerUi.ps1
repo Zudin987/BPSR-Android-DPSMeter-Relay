@@ -560,6 +560,16 @@ function Update-Status {
     Update-UiButtonStates -Running $false -ProfileReady $profileReady -RuntimeReady $runtimeReady -ForeignRelay $foreign -FirewallReady $firewallReady -PhoneConfirmed $phoneConfirmed
 }
 
+function Invoke-MinimizeManagerToTray {
+    if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {
+        Hide-BpsrRelayManagerWindow
+        return
+    }
+
+    # Fallback for direct script launches outside the packaged tray host.
+    $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+}
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'BPSR Android Relay'
 $form.ClientSize = New-Object System.Drawing.Size(964, 690)
@@ -734,6 +744,9 @@ $step5.Controls.Add($script:btnStart)
 $script:btnStop = New-UiButton -Text 'Stop Relay' -X 271 -Y 57 -Width 108 -Height 27 -Danger
 $script:btnStop.Add_Click({ Invoke-StopRelayGuided })
 $step5.Controls.Add($script:btnStop)
+$script:btnTray = New-UiButton -Text 'Minimize to Tray' -X 387 -Y 57 -Width 143 -Height 27
+$script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })
+$step5.Controls.Add($script:btnTray)
 $setupPanel.Controls.Add($step5)
 
 # HOME - compact status, next action and daily use
@@ -1003,6 +1016,7 @@ if ($env:BPSR_RELAY_UI_SELF_TEST -eq '1') {
     if ($tabs.TabPages.Count -ne 3) { throw 'UI must contain exactly Home, Details, and Help tabs.' }
     if ($homeTab.Text -ne 'Home' -or $detailsTab.Text -ne 'Details' -or $helpTab.Text -ne 'Help') { throw 'Simple UI tab names changed unexpectedly.' }
     if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }
+    if ($script:btnTray.Text -ne 'Minimize to Tray') { throw 'Explicit tray action is missing.' }
     if ($script:btnShare.Text -ne 'Start Phone Setup' -or $script:btnQr.Text -ne 'Show SFA QR' -or $script:btnUrl.Text -ne 'Copy SFA Link') { throw 'SFA phone setup wording changed.' }
     if ($androidRight.Text -notmatch 'Scan QR Code' -or $androidRight.Text -notmatch 'Per-app proxy') { throw 'Android guide incomplete.' }
     if ($dpsText.Text -notmatch 'StarSEA') { throw 'DPS meter target is missing from Home.' }
@@ -1112,6 +1126,6 @@ Add-Log ('Ready - manager ' + $ManagerVersion + '.')
 Add-Log 'DPS meter target: StarSEA.'
 Add-Log ('Tested relay core: sing-box ' + $TestedSingBoxVersion + '.')
 
-[void]$form.ShowDialog()
+[System.Windows.Forms.Application]::Run($form)
 $timer.Stop()
 Stop-ProfileShare
