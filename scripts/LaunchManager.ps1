@@ -4,7 +4,7 @@ $manager = Join-Path $PSScriptRoot 'BPSRRelayManager.ps1'
 $script:trayNotifyIcon = $null
 $script:trayContextMenu = $null
 $script:trayPollTimer = $null
-$script:trayMessageFilter = $null
+$script:trayHiddenByUser = $false
 $script:trayOwnedIcon = $null
 $script:trayNoticeShown = $false
 $script:trayExitRequested = $false
@@ -32,7 +32,7 @@ function Show-BpsrRelayManagerWindow {
     $window.Visible = $true
     $window.BringToFront()
     [void]$window.Activate()
-    [BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false
+    $script:trayHiddenByUser = $false
 }
 
 function Hide-BpsrRelayManagerWindow {
@@ -41,7 +41,7 @@ function Hide-BpsrRelayManagerWindow {
 
     $window.ShowInTaskbar = $false
     $window.Hide()
-    [BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $true
+    $script:trayHiddenByUser = $true
 }
 
 function Test-BpsrRelayRunningForTray {
@@ -134,7 +134,6 @@ function Exit-BpsrRelayTrayManager {
     }
 
     $script:trayExitRequested = $true
-    [BpsrRelayTray.ManagerMessageFilter]::ExitRequested = $true
     $window = Get-BpsrRelayManagerForm
     if ($window -and -not $window.IsDisposed) {
         # Dispose directly so the old FormClosing keep/stop prompt is bypassed.
@@ -268,10 +267,7 @@ namespace BpsrRelayTray
         return $false
     }
 
-    [BpsrRelayTray.ManagerMessageFilter]::ExitRequested = $false
-    [BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false
-    $script:trayMessageFilter = New-Object BpsrRelayTray.ManagerMessageFilter
-    [System.Windows.Forms.Application]::AddMessageFilter($script:trayMessageFilter)
+    $script:trayHiddenByUser = $false
 
     $script:trayContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 
@@ -332,12 +328,7 @@ namespace BpsrRelayTray
                 Show-BpsrRelayManagerWindow
             }
 
-            $window = Get-BpsrRelayManagerForm
-            if ($window -and $window.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
-                Hide-BpsrRelayManagerWindow
-            }
-
-            if ([BpsrRelayTray.ManagerMessageFilter]::HiddenByUser -and -not $script:trayNoticeShown) {
+            if ($script:trayHiddenByUser -and -not $script:trayNoticeShown) {
                 $script:trayNoticeShown = $true
                 $script:trayNotifyIcon.BalloonTipTitle = 'BPSR Android Relay'
                 $script:trayNotifyIcon.BalloonTipText = 'Still running in the system tray. Click the tray icon to reopen it.'
@@ -358,11 +349,6 @@ function Stop-BpsrRelayTray {
         try { $script:trayPollTimer.Stop() } catch {}
         try { $script:trayPollTimer.Dispose() } catch {}
         $script:trayPollTimer = $null
-    }
-
-    if ($script:trayMessageFilter) {
-        try { [System.Windows.Forms.Application]::RemoveMessageFilter($script:trayMessageFilter) } catch {}
-        $script:trayMessageFilter = $null
     }
 
     if ($script:trayNotifyIcon) {
