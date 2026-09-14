@@ -61,8 +61,12 @@ namespace BpsrRelayManager
                 if (uiSelfTest)
                 {
                     RelayEngine uiEngine = new RelayEngine(root, delegate(string message) { });
-                    using (MainForm testForm = new MainForm(uiEngine, true)) testForm.RunUiSelfTest();
-                    Console.WriteLine("UI SELF-TEST PASS: native Home/Details/Help layout and tray controls are present.");
+                    using (MainForm testForm = new MainForm(uiEngine, true))
+                    {
+                        Branding.Apply(testForm);
+                        testForm.RunUiSelfTest();
+                    }
+                    Console.WriteLine("UI SELF-TEST PASS: native Home/Details/Help layout, app branding and tray controls are present.");
                     return 0;
                 }
 
@@ -82,6 +86,7 @@ namespace BpsrRelayManager
                         RelayEngine engine = new RelayEngine(root, null);
                         using (MainForm form = new MainForm(engine, false))
                         {
+                            Branding.Apply(form);
                             Thread restoreThread = new Thread(delegate()
                             {
                                 while (!form.IsDisposed)
