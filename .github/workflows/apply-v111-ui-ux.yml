@@ -19,4 +19,21 @@ jobs:
           fetch-depth: 0
       - name: Apply UI patch
         shell: powershell
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\ApplyV111UiPatch.ps1'
+        run: |
+          $patchPath = '.\scripts\ApplyV111UiPatch.ps1'
+          $patch = [IO.File]::ReadAllText($patchPath)
+          $releaseBlock = @'
+$releasePath = '.github\workflows\release.yml'
+$release = [IO.File]::ReadAllText($releasePath)
+$release = $release.Replace('1.1.0', '1.1.1')
+[IO.File]::WriteAllText($releasePath, $release, (New-Object Text.UTF8Encoding($false)))
+
+'@
+          if (-not $patch.Contains($releaseBlock)) { throw 'Expected release-workflow patch block was not found.' }
+          $patch = $patch.Replace($releaseBlock, '')
+          $patch = $patch.Replace("git rm '.github/workflows/apply-v111-ui-ux.yml'`r`n", '')
+          $patch = $patch.Replace('git add $path $versionPath $releasePath', 'git add $path $versionPath')
+          $patch = $patch.Replace('git push origin HEAD:ui/v111-visibility-ux', "git push origin HEAD:ui/v111-visibility-ux`r`nif (`$LASTEXITCODE -ne 0) { throw 'git push failed' }")
+          [IO.File]::WriteAllText($patchPath, $patch, (New-Object Text.UTF8Encoding($false)))
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $patchPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
