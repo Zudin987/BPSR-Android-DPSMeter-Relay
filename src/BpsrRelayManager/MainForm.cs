@@ -60,7 +60,6 @@ namespace BpsrRelayManager
         private ToolStripMenuItem _trayStop;
         private ProfileServer _profileServer;
         private bool _forceExit;
-
         private bool _trayNoticeShown;
 
         public MainForm(RelayEngine engine, bool selfTest)
@@ -107,7 +106,17 @@ namespace BpsrRelayManager
             Label version = MakeLabel("v" + _engine.ManagerVersion, 805, 22, 120, 24, 10f, true, _muted);
             version.TextAlign = ContentAlignment.MiddleRight;
             Controls.Add(version);
-            _overallState = MakeLabel(\
+            _overallState = MakeLabel("CHECKING", 744, 49, 181, 25, 9.25f, true, _neutral);
+            _overallState.TextAlign = ContentAlignment.MiddleCenter;
+            _overallState.BackColor = _surfaceSoft;
+            _overallState.BorderStyle = BorderStyle.FixedSingle;
+            Controls.Add(_overallState);
+
+            _toolTip = new ToolTip();
+            _toolTip.AutoPopDelay = 9000;
+            _toolTip.InitialDelay = 350;
+            _toolTip.ReshowDelay = 100;
+            _toolTip.ShowAlways = true;
 
             _tabs = new TabControl();
             _tabs.Location = new Point(24, 84);
@@ -128,28 +137,28 @@ namespace BpsrRelayManager
             Panel setup = new Panel(); setup.Location = new Point(14, 14); setup.Size = new Size(548, 522); setup.BackColor = _background; _homeTab.Controls.Add(setup);
             Panel address = Card(0, 0, 548, 70); AddCardTitle(address, "This PC", 7);
             _ip = new ComboBox(); _ip.Location = new Point(16, 35); _ip.Size = new Size(218, 26); _ip.DropDownStyle = ComboBoxStyle.DropDownList; _ip.SelectedIndexChanged += delegate { if (!_selfTest) UpdateStatus(); }; address.Controls.Add(_ip);
-            _toolTip.SetToolTip(_ip, \
+            _toolTip.SetToolTip(_ip, "LAN IPv4 address Android will connect to. Usually leave the first auto-selected address.");
             _adapterInfo = MakeLabel("Auto-selected LAN adapter.\r\nPhone must use the same router.", 250, 30, 280, 34, 9f, false, _muted); address.Controls.Add(_adapterInfo); setup.Controls.Add(address);
 
             Panel step1 = Card(0, 80, 548, 70); AddCardTitle(step1, "1. Prepare Relay", 10); step1.Controls.Add(MakeLabel("Download/verify the relay runtime and create the compatibility profile.", 16, 36, 350, 24, 9f, false, _muted));
-            _prepare = UiButton(\
+            _prepare = UiButton("Prepare Relay", 382, 32, 148, 30, false, false); _prepare.Click += delegate { PrepareRelayGuided(); }; step1.Controls.Add(_prepare); _toolTip.SetToolTip(_prepare, "Download/verify the relay runtime and generate the current phone profile."); setup.Controls.Add(step1);
 
             Panel step2 = Card(0, 160, 548, 70); AddCardTitle(step2, "2. Allow Firewall", 10); step2.Controls.Add(MakeLabel("Allow your phone to reach this PC on the trusted Private LAN.", 16, 36, 350, 24, 9f, false, _muted));
-            _firewall = UiButton(\
+            _firewall = UiButton("Allow Firewall", 382, 32, 148, 30, false, false); _firewall.Click += delegate { AllowFirewallGuided(); }; step2.Controls.Add(_firewall); _toolTip.SetToolTip(_firewall, "Windows will ask for Administrator approval. This only opens the relay to your trusted Private LAN."); setup.Controls.Add(step2);
 
             Panel step3 = Card(0, 240, 548, 102); AddCardTitle(step3, "3. Android Setup", 9); step3.Controls.Add(MakeLabel("Scan/import the current profile in SFA. The temporary setup server stops automatically.", 16, 34, 500, 23, 9f, false, _muted));
-            _phoneSetup = UiButton(\
-            _qr = UiButton(\
-            _copyLink = UiButton(\
+            _phoneSetup = UiButton("Start Phone Setup", 16, 62, 180, 30, false, false); _phoneSetup.Click += delegate { StartPhoneSetupGuided(); }; step3.Controls.Add(_phoneSetup); _toolTip.SetToolTip(_phoneSetup, "Temporarily serve the current SFA profile to your phone and open the local QR flow.");
+            _qr = UiButton("Show SFA QR", 204, 62, 150, 30, false, false); _qr.Click += delegate { ShowQrGuided(); }; step3.Controls.Add(_qr); _toolTip.SetToolTip(_qr, "Open the locally generated QR page for the active phone setup session.");
+            _copyLink = UiButton("Copy SFA Link", 362, 62, 168, 30, false, false); _copyLink.Click += delegate { CopySfaLink(); }; step3.Controls.Add(_copyLink); _toolTip.SetToolTip(_copyLink, "Copy the current local SFA import link instead of scanning the QR."); setup.Controls.Add(step3);
 
             Panel step4 = Card(0, 352, 548, 70); AddCardTitle(step4, "4. DPS Meter", 10); step4.Controls.Add(MakeLabel("Target StarSEA only. Never BPSRMobileFront.", 16, 37, 330, 22, 9.5f, true, _text));
             Button copyNotes = UiButton("Copy Setup Notes", 382, 32, 148, 30, false, false); copyNotes.Click += delegate { CopyDpsNotes(); }; step4.Controls.Add(copyNotes); setup.Controls.Add(step4);
 
             Panel step5 = Card(0, 432, 548, 90); AddCardTitle(step5, "5. Start & Play", 9); step5.Controls.Add(MakeLabel("Run Check if needed. Start Relay guides you if phone setup is unfinished.", 16, 34, 500, 23, 9f, false, _muted));
-            _check = UiButton(\
-            _start = UiButton(\
-            _stop = UiButton(\
-            _trayButton = UiButton(\
+            _check = UiButton("Run Check", 16, 55, 105, 30, false, false); _check.Click += delegate { RunCheck(); }; step5.Controls.Add(_check); _toolTip.SetToolTip(_check, "Run a quick readiness check without starting the relay.");
+            _start = UiButton("Start Relay", 129, 55, 134, 30, false, false); _start.Click += delegate { StartRelayGuided(); }; step5.Controls.Add(_start); _toolTip.SetToolTip(_start, "Start the phone-facing relay and StarSEA process target.");
+            _stop = UiButton("Stop Relay", 271, 55, 108, 30, false, true); _stop.Click += delegate { StopRelayGuided(); }; step5.Controls.Add(_stop); _toolTip.SetToolTip(_stop, "Stop the active relay. This can interrupt BPSR if the phone is currently using it.");
+            _trayButton = UiButton("Minimize to Tray", 387, 55, 143, 30, false, false); _trayButton.Click += delegate { MinimizeToTray(); }; step5.Controls.Add(_trayButton); _toolTip.SetToolTip(_trayButton, "Hide this window while keeping the manager available from the system tray."); setup.Controls.Add(step5);
 
             Panel statusPanel = new Panel(); statusPanel.Location = new Point(578, 14); statusPanel.Size = new Size(316, 522); statusPanel.BackColor = _background; _homeTab.Controls.Add(statusPanel);
             Panel status = Card(0, 0, 316, 190); AddCardTitle(status, "Status", 10); _relayState = StatusRow(status, "Relay", 44); _runtimeState = StatusRow(status, "PC setup", 78); _profileState = StatusRow(status, "Phone profile", 112); _firewallState = StatusRow(status, "Firewall", 146); statusPanel.Controls.Add(status);
@@ -394,7 +403,12 @@ namespace BpsrRelayManager
             else if (!confirmed) _nextAction.Text = _profileServer != null && _profileServer.Running ? "Phone setup is open. Scan the QR and import BPSR Relay in SFA." : "Click Start Phone Setup and import the current profile in SFA.";
             else _nextAction.Text = "Setup is ready. Click Start Relay.";
             Button recommended;
-            if (hasForeign) { SetOverallState(\
+            if (hasForeign) { SetOverallState("ACTION REQUIRED", _danger, _dangerSoft); recommended = _prepare; }
+            else if (!runtime || !profile) { SetOverallState("SETUP NEEDED", _warning, _warningSoft); recommended = _prepare; }
+            else if (!firewall) { SetOverallState("SETUP NEEDED", _warning, _warningSoft); recommended = _firewall; }
+            else if (!confirmed) { SetOverallState("FINISH PHONE SETUP", _warning, _warningSoft); recommended = _profileServer != null && _profileServer.Running ? _qr : _phoneSetup; }
+            else { SetOverallState("READY TO START", _primary, _primarySoft); recommended = _start; }
+            SetButtonStates(false, runtime, profile, firewall, hasForeign); SetRecommendedAction(recommended); UpdateTray(false);
             if (_profileServer != null && !_profileServer.Running) { _profileServer.Dispose(); _profileServer = null; }
         }
 
@@ -501,7 +515,8 @@ namespace BpsrRelayManager
             if (_homeTab.Text != "Home" || _detailsTab.Text != "Details" || _helpTab.Text != "Help") throw new InvalidOperationException("Native UI tab names changed unexpectedly.");
             if (_prepare.Text != "Prepare Relay" || _start.Text != "Start Relay" || _trayButton.Text != "Minimize to Tray") throw new InvalidOperationException("Primary native UI actions are missing.");
             if (_phoneSetup.Text != "Start Phone Setup" || _qr.Text != "Show SFA QR" || _copyLink.Text != "Copy SFA Link") throw new InvalidOperationException("Native SFA setup actions are missing.");
-            if (_notifyIcon == null || _notifyIcon.ContextMenuStrip == null) throw new InvalidOperationException(\
+            if (_notifyIcon == null || _notifyIcon.ContextMenuStrip == null) throw new InvalidOperationException("Native tray integration is missing.");
+            if (_overallState == null || _adapterInfo == null || _toolTip == null) throw new InvalidOperationException("Native visibility/UX guidance controls are missing.");
             foreach (TabPage page in _tabs.TabPages) if (page.Width <= 0 || page.Height <= 0) throw new InvalidOperationException("Native UI layout is invalid.");
         }
 
