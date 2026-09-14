@@ -1,0 +1,123 @@
+name: Apply explicit tray fix
+
+on:
+  push:
+    branches:
+      - tmp/tray-explicit-patcher
+    paths:
+      - .github/workflows/apply-explicit-tray-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: tmp/tray-explicit-patcher
+
+      - name: Patch tray behavior and UI
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f'Missing expected block: {label}')
+              return text.replace(old, new, 1)
+
+          launch_path = Path('scripts/LaunchManager.ps1')
+          launch = launch_path.read_text(encoding='utf-8')
+
+          launch = replace_once(
+              launch,
+              '$script:trayMessageFilter = $null',
+              '$script:trayHiddenByUser = $false',
+              'tray message-filter variable'
+          )
+          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false', '$script:trayHiddenByUser = $false')
+          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $true', '$script:trayHiddenByUser = $true')
+          launch = launch.replace('    [BpsrRelayTray.ManagerMessageFilter]::ExitRequested = $true\n', '')
+
+          launch = replace_once(
+              launch,
+              "    [BpsrRelayTray.ManagerMessageFilter]::ExitRequested = $false\n    [BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false\n    $script:trayMessageFilter = New-Object BpsrRelayTray.ManagerMessageFilter\n    [System.Windows.Forms.Application]::AddMessageFilter($script:trayMessageFilter)\n",
+              "    $script:trayHiddenByUser = $false\n",
+              'message filter registration'
+          )
+
+          launch = replace_once(
+              launch,
+              "            $window = Get-BpsrRelayManagerForm\n            if ($window -and $window.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {\n                Hide-BpsrRelayManagerWindow\n            }\n\n            if ([BpsrRelayTray.ManagerMessageFilter]::HiddenByUser -and -not $script:trayNoticeShown) {\n",
+              "            if ($script:trayHiddenByUser -and -not $script:trayNoticeShown) {\n",
+              'automatic minimize interception'
+          )
+
+          launch = replace_once(
+              launch,
+              "    if ($script:trayMessageFilter) {\n        try { [System.Windows.Forms.Application]::RemoveMessageFilter($script:trayMessageFilter) } catch {}\n        $script:trayMessageFilter = $null\n    }\n\n",
+              '',
+              'message filter cleanup'
+          )
+
+          launch_path.write_text(launch, encoding='utf-8', newline='\n')
+
+          ui_path = Path('scripts/ManagerUi.ps1')
+          ui = ui_path.read_text(encoding='utf-8')
+
+          tray_fn = r'''function Invoke-MinimizeManagerToTray {
+    if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {
+        Hide-BpsrRelayManagerWindow
+        return
+    }
+
+    # Fallback for direct script launches outside the packaged tray host.
+    $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+}
+
+'''
+          ui = replace_once(
+              ui,
+              '$form = New-Object System.Windows.Forms.Form',
+              tray_fn + '$form = New-Object System.Windows.Forms.Form',
+              'form creation marker'
+          )
+
+          tray_button = r'''$script:btnTray = New-UiButton -Text 'Minimize to Tray' -X 387 -Y 57 -Width 143 -Height 27
+$script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })
+$step5.Controls.Add($script:btnTray)
+'''
+          ui = replace_once(
+              ui,
+              "$script:btnStop.Add_Click({ Invoke-StopRelayGuided })\n$step5.Controls.Add($script:btnStop)\n$setupPanel.Controls.Add($step5)",
+              "$script:btnStop.Add_Click({ Invoke-StopRelayGuided })\n$step5.Controls.Add($script:btnStop)\n" + tray_button + '$setupPanel.Controls.Add($step5)',
+              'step 5 controls'
+          )
+
+          ui = replace_once(
+              ui,
+              "    if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }\n",
+              "    if ($script:btnStart.Text -ne 'Start Relay' -or $script:btnSetup.Text -ne 'Prepare Relay') { throw 'Primary simple-action wording changed unexpectedly.' }\n    if ($script:btnTray.Text -ne 'Minimize to Tray') { throw 'Explicit tray action is missing.' }\n",
+              'UI tray self-test'
+          )
+
+          ui = replace_once(
+              ui,
+              '[void]$form.ShowDialog()',
+              '[System.Windows.Forms.Application]::Run($form)',
+              'modal message loop'
+          )
+
+          ui_path.write_text(ui, encoding='utf-8', newline='\n')
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/LaunchManager.ps1 scripts/ManagerUi.ps1
+          git commit -m "Fix tray lifecycle and add explicit minimize button"
+          git push origin HEAD:tmp/tray-explicit-patcher
