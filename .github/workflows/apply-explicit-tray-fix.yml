@@ -39,8 +39,6 @@ jobs:
               '$script:trayHiddenByUser = $false',
               'tray message-filter variable'
           )
-          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false', '$script:trayHiddenByUser = $false')
-          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $true', '$script:trayHiddenByUser = $true')
           launch = launch.replace('    [BpsrRelayTray.ManagerMessageFilter]::ExitRequested = $true\n', '')
 
           launch = replace_once(
@@ -64,23 +62,14 @@ jobs:
               'message filter cleanup'
           )
 
+          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $false', '$script:trayHiddenByUser = $false')
+          launch = launch.replace('[BpsrRelayTray.ManagerMessageFilter]::HiddenByUser = $true', '$script:trayHiddenByUser = $true')
           launch_path.write_text(launch, encoding='utf-8', newline='\n')
 
           ui_path = Path('scripts/ManagerUi.ps1')
           ui = ui_path.read_text(encoding='utf-8')
 
-          tray_fn = r'''function Invoke-MinimizeManagerToTray {
-              if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {
-                  Hide-BpsrRelayManagerWindow
-                  return
-              }
-
-              # Fallback for direct script launches outside the packaged tray host.
-              $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
-          }
-
-          '''
-          tray_fn = '\n'.join(line[10:] if line.startswith('          ') else line for line in tray_fn.splitlines()) + '\n'
+          tray_fn = '''function Invoke-MinimizeManagerToTray {\n    if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {\n        Hide-BpsrRelayManagerWindow\n        return\n    }\n\n    # Fallback for direct script launches outside the packaged tray host.\n    $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized\n}\n\n'''
           ui = replace_once(
               ui,
               '$form = New-Object System.Windows.Forms.Form',
@@ -88,11 +77,7 @@ jobs:
               'form creation marker'
           )
 
-          tray_button = r'''$script:btnTray = New-UiButton -Text 'Minimize to Tray' -X 387 -Y 57 -Width 143 -Height 27
-          $script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })
-          $step5.Controls.Add($script:btnTray)
-          '''
-          tray_button = '\n'.join(line[10:] if line.startswith('          ') else line for line in tray_button.splitlines()) + '\n'
+          tray_button = "$script:btnTray = New-UiButton -Text 'Minimize to Tray' -X 387 -Y 57 -Width 143 -Height 27\n$script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })\n$step5.Controls.Add($script:btnTray)\n"
           ui = replace_once(
               ui,
               "$script:btnStop.Add_Click({ Invoke-StopRelayGuided })\n$step5.Controls.Add($script:btnStop)\n$setupPanel.Controls.Add($step5)",
