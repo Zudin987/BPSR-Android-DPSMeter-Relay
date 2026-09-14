@@ -25,6 +25,7 @@ namespace BpsrRelayManager
             ServicePointBootstrap.EnableTls12();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            bool nonInteractive = HasArg(args, "--windows-api-self-test") || HasArg(args, "--self-test") || HasArg(args, "--ui-self-test") || string.Equals(Environment.GetEnvironmentVariable("BPSR_RELAY_UI_SELF_TEST"), "1", StringComparison.Ordinal);
 
             try
             {
@@ -105,6 +106,11 @@ namespace BpsrRelayManager
             }
             catch (Exception ex)
             {
+                if (nonInteractive)
+                {
+                    try { Console.Error.WriteLine(ex.ToString()); } catch { }
+                    return 1;
+                }
                 try { MessageBox.Show(ex.Message, "BPSR Relay Manager could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 catch { }
                 return 1;
