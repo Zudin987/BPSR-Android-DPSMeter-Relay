@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to publish (example: 1.0.5)'
+        description: 'Stable version to publish (example: 1.1.0)'
         required: true
-        default: '1.0.5'
+        default: '1.0.6'
         type: string
       field_test_passed:
         description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
@@ -32,90 +32,65 @@ jobs:
       - name: Enforce stable release gate
         shell: powershell
         run: |
-          if ($env:GITHUB_REF_NAME -ne 'main') {
-            throw 'Stable releases must be dispatched from the main branch.'
-          }
-
+          if ($env:GITHUB_REF_NAME -ne 'main') { throw 'Stable releases must be dispatched from the main branch.' }
           $version = '${{ inputs.version }}'.Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw 'Stable version must be plain semver such as 1.0.1. RC/prerelease versions are not allowed here.'
-          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Stable version must be plain semver such as 1.1.0.' }
+          if ('${{ inputs.field_test_passed }}' -ne 'YES') { throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/compatible-DPS-meter field test has not been confirmed.' }
 
-          if ('${{ inputs.field_test_passed }}' -ne 'YES') {
-            throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/compatible-DPS-meter field test has not been confirmed.'
-          }
-
-          $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
-          $match = [regex]::Match(
-            $manager,
-            '^\$ManagerVersion\s*=\s*''([^'']+)''',
-            [System.Text.RegularExpressions.RegexOptions]::Multiline
-          )
-          if (-not $match.Success) { throw 'Could not read ManagerVersion.' }
+          $versionSource = Get-Content '.\src\BpsrRelayManager\VersionInfo.cs' -Raw
+          $match = [regex]::Match($versionSource, 'public const string Version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw 'Could not read native manager version.' }
           $sourceVersion = $match.Groups[1].Value.Trim()
-          if ($sourceVersion -ne $version) {
-            throw ('Release version mismatch. Source=' + $sourceVersion + ', requested=' + $version)
-          }
+          if ($sourceVersion -ne $version) { throw ('Release version mismatch. Source=' + $sourceVersion + ', requested=' + $version) }
 
           $readme = Get-Content '.\README.md' -Raw
-          if ($readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') {
-            throw 'README still contains prerelease/release-gate wording. Finalize documentation first.'
-          }
-
-          Write-Host ('Stable source/documentation gate passed for v' + $version + '.')
+          if ($readme -match '(?i)release candidate' -or $readme -match 'NOT quite yet') { throw 'README still contains prerelease/release-gate wording.' }
+          Write-Host ('Stable native source/documentation gate passed for v' + $version + '.')
 
       - name: Require green Validate run for exact commit
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $json = gh run list `
-            --repo '${{ github.repository }}' `
-            --workflow 'Validate' `
-            --commit $env:GITHUB_SHA `
-            --limit 20 `
-            --json databaseId,status,conclusion,event,headSha
+          $json = gh run list --repo '${{ github.repository }}' --workflow 'Validate' --commit $env:GITHUB_SHA --limit 20 --json databaseId,status,conclusion,event,headSha
           if ($LASTEXITCODE -ne 0) { throw 'Could not query Validate workflow history.' }
-
           $runs = @($json | ConvertFrom-Json)
-          $passed = @($runs | Where-Object {
-            $_.headSha -eq $env:GITHUB_SHA -and
-            $_.status -eq 'completed' -and
-            $_.conclusion -eq 'success'
-          })
-          if ($passed.Count -eq 0) {
-            throw ('Stable release blocked: exact commit ' + $env:GITHUB_SHA + ' does not yet have a completed successful Validate workflow run.')
-          }
+          $passed = @($runs | Where-Object { $_.headSha -eq $env:GITHUB_SHA -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+          if ($passed.Count -eq 0) { throw ('Stable release blocked: exact commit ' + $env:GITHUB_SHA + ' does not have a completed successful Validate run.') }
           Write-Host ('Exact-commit Validate gate passed using run ' + $passed[0].databaseId + '.')
 
-      - name: Parse PowerShell with Windows PowerShell 5.1
+      - name: Parse developer PowerShell tooling
         shell: powershell
         run: |
-          Get-ChildItem '.\scripts' -Filter '*.ps1' -File | ForEach-Object {
-            $tokens = $null
-            $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-              exit 1
-            }
+          foreach ($relative in @('scripts\BuildNativeManager.ps1','scripts\BuildRelease.ps1','scripts\TestRelaySmoke.ps1','scripts\ServeProfile.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:GITHUB_WORKSPACE $relative), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error ($relative + ': ' + $_.Message) }; exit 1 }
           }
-          Write-Host 'PowerShell syntax OK.'
+          Write-Host 'Developer PowerShell tooling syntax OK.'
 
-      - name: Run relay config self-test
+      - name: Build native manager
         shell: powershell
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BPSRRelayManager.ps1' -SelfTest
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildNativeManager.ps1' -OutputPath '.build\native\BPSR Relay Manager.exe'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run native manager self-test
+        shell: powershell
+        run: |
+          $testRoot = Join-Path $env:GITHUB_WORKSPACE '.native-release-test'
+          if (Test-Path $testRoot) { Remove-Item $testRoot -Recurse -Force }
+          & '.\.build\native\BPSR Relay Manager.exe' '--self-test' '--self-test-root' $testRoot
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke-test v4-compatible two-stage relay data path
         shell: powershell
         run: |
-          $singBox = Join-Path $env:GITHUB_WORKSPACE '.runtime\sing-box.exe'
+          $singBox = Join-Path $env:GITHUB_WORKSPACE '.native-release-test\.runtime\sing-box.exe'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\TestRelaySmoke.ps1' -SingBoxExe $singBox
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build clean release package
+      - name: Build clean native release package
         shell: powershell
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildRelease.ps1' -OutputDirectory 'dist' -Clean
@@ -131,26 +106,12 @@ jobs:
           $zip = Get-ChildItem '.\dist' -Filter '*.zip' -File | Select-Object -First 1
           $sha = Get-ChildItem '.\dist' -Filter '*.sha256' -File | Select-Object -First 1
           if (-not $zip -or -not $sha) { throw 'Release assets are missing.' }
-
           $expectedZip = 'BPSR-Android-DPSMeter-Relay.zip'
           $expectedSha = 'BPSR-Android-DPSMeter-Relay.zip.sha256'
-          if ($zip.Name -ne $expectedZip -or $sha.Name -ne $expectedSha) {
-            throw ('Release assets must use permanent website-safe names. Found: ' + $zip.Name + ', ' + $sha.Name)
-          }
-
+          if ($zip.Name -ne $expectedZip -or $sha.Name -ne $expectedSha) { throw ('Release assets must use permanent names. Found: ' + $zip.Name + ', ' + $sha.Name) }
           cmd.exe /d /c "gh release view $tag --repo $env:GITHUB_REPOSITORY >nul 2>nul"
-          $releaseExists = ($LASTEXITCODE -eq 0)
-          if ($releaseExists) {
-            throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.')
-          }
-
-          gh release create $tag $zip.FullName $sha.FullName `
-            --repo '${{ github.repository }}' `
-            --target $env:GITHUB_SHA `
-            --title ('BPSR Android DPSMeter Relay ' + $tag) `
-            --generate-notes `
-            --latest
-
+          if ($LASTEXITCODE -eq 0) { throw ('Release ' + $tag + ' already exists. Refusing to overwrite it.') }
+          gh release create $tag $zip.FullName $sha.FullName --repo '${{ github.repository }}' --target $env:GITHUB_SHA --title ('BPSR Android DPSMeter Relay ' + $tag) --generate-notes --latest
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
-          Write-Host ('Published ' + $tag + ' from commit ' + $env:GITHUB_SHA)
+          Write-Host ('Published native ' + $tag + ' from commit ' + $env:GITHUB_SHA)
           Write-Host ('Permanent direct download: https://github.com/${{ github.repository }}/releases/latest/download/' + $expectedZip)
