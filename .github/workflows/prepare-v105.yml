@@ -24,8 +24,8 @@ jobs:
         run: |
           $managerPath = 'scripts/BPSRRelayManager.ps1'
           $manager = Get-Content $managerPath -Raw
-          $oldManager = "$ManagerVersion = '1.0.4'"
-          $newManager = "$ManagerVersion = '1.0.5'"
+          $oldManager = "`$ManagerVersion = '1.0.4'"
+          $newManager = "`$ManagerVersion = '1.0.5'"
           if (-not $manager.Contains($oldManager)) { throw 'Expected v1.0.4 ManagerVersion was not found.' }
           $manager = $manager.Replace($oldManager, $newManager)
           [System.IO.File]::WriteAllText((Join-Path $PWD $managerPath), $manager, (New-Object System.Text.UTF8Encoding($false)))
