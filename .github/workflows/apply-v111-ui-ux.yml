@@ -17,25 +17,16 @@ jobs:
         with:
           ref: ui/v111-visibility-ux
           fetch-depth: 0
-      - name: Apply UI patch
+      - name: Rebuild UI changes from clean main source
         shell: powershell
         run: |
-          $patchPath = '.\scripts\ApplyV111UiPatch.ps1'
-          $lines = Get-Content $patchPath
-          $out = New-Object System.Collections.Generic.List[string]
-          $skip = 0
-          foreach ($line in $lines) {
-            if ($skip -gt 0) { $skip--; continue }
-            if ($line -eq '$releasePath = ''.github\workflows\release.yml''') { $skip = 4; continue }
-            if ($line -eq 'git rm ''.github/workflows/apply-v111-ui-ux.yml''') { continue }
-            if ($line -eq 'git add $path $versionPath $releasePath') { $out.Add('git add $path $versionPath'); continue }
-            if ($line -eq 'git push origin HEAD:ui/v111-visibility-ux') {
-              $out.Add($line)
-              $out.Add('if ($LASTEXITCODE -ne 0) { throw ''git push failed'' }')
-              continue
-            }
-            $out.Add($line)
-          }
-          [IO.File]::WriteAllLines($patchPath, $out, (New-Object Text.UTF8Encoding($false)))
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $patchPath
+          git checkout origin/main -- 'src/BpsrRelayManager/MainForm.cs' 'src/BpsrRelayManager/VersionInfo.cs'
+          python '.\scripts\ApplyV111UiPatch.py'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name 'MrEz'
+          git config user.email '39240221+Zudin987@users.noreply.github.com'
+          git rm 'scripts/ApplyV111UiPatch.py'
+          git add 'src/BpsrRelayManager/MainForm.cs' 'src/BpsrRelayManager/VersionInfo.cs'
+          git commit -m 'Improve native UI visibility and guided workflow'
+          git push origin HEAD:ui/v111-visibility-ux
+          if ($LASTEXITCODE -ne 0) { throw 'git push failed' }
