@@ -21,19 +21,21 @@ jobs:
         shell: powershell
         run: |
           $patchPath = '.\scripts\ApplyV111UiPatch.ps1'
-          $patch = [IO.File]::ReadAllText($patchPath)
-          $releaseBlock = @'
-$releasePath = '.github\workflows\release.yml'
-$release = [IO.File]::ReadAllText($releasePath)
-$release = $release.Replace('1.1.0', '1.1.1')
-[IO.File]::WriteAllText($releasePath, $release, (New-Object Text.UTF8Encoding($false)))
-
-'@
-          if (-not $patch.Contains($releaseBlock)) { throw 'Expected release-workflow patch block was not found.' }
-          $patch = $patch.Replace($releaseBlock, '')
-          $patch = $patch.Replace("git rm '.github/workflows/apply-v111-ui-ux.yml'`r`n", '')
-          $patch = $patch.Replace('git add $path $versionPath $releasePath', 'git add $path $versionPath')
-          $patch = $patch.Replace('git push origin HEAD:ui/v111-visibility-ux', "git push origin HEAD:ui/v111-visibility-ux`r`nif (`$LASTEXITCODE -ne 0) { throw 'git push failed' }")
-          [IO.File]::WriteAllText($patchPath, $patch, (New-Object Text.UTF8Encoding($false)))
+          $lines = Get-Content $patchPath
+          $out = New-Object System.Collections.Generic.List[string]
+          $skip = 0
+          foreach ($line in $lines) {
+            if ($skip -gt 0) { $skip--; continue }
+            if ($line -eq '$releasePath = ''.github\workflows\release.yml''') { $skip = 4; continue }
+            if ($line -eq 'git rm ''.github/workflows/apply-v111-ui-ux.yml''') { continue }
+            if ($line -eq 'git add $path $versionPath $releasePath') { $out.Add('git add $path $versionPath'); continue }
+            if ($line -eq 'git push origin HEAD:ui/v111-visibility-ux') {
+              $out.Add($line)
+              $out.Add('if ($LASTEXITCODE -ne 0) { throw ''git push failed'' }')
+              continue
+            }
+            $out.Add($line)
+          }
+          [IO.File]::WriteAllLines($patchPath, $out, (New-Object Text.UTF8Encoding($false)))
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File $patchPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
