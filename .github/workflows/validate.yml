@@ -32,6 +32,7 @@ jobs:
           $program = Get-Content 'src\BpsrRelayManager\Program.cs' -Raw
           $engine = Get-Content 'src\BpsrRelayManager\RelayEngine.cs' -Raw
           $windows = Get-Content 'src\BpsrRelayManager\WindowsIntegration.cs' -Raw
+          $windowsTest = Get-Content 'src\BpsrRelayManager\WindowsApiSelfTest.cs' -Raw
           $profile = Get-Content 'src\BpsrRelayManager\ProfileServer.cs' -Raw
           $ui = Get-Content 'src\BpsrRelayManager\MainForm.cs' -Raw
           $builder = Get-Content 'scripts\BuildRelease.ps1' -Raw
@@ -47,11 +48,12 @@ jobs:
           foreach ($needle in @('public const int FrontPort = 10808','InternalPortStart = 18080','InternalPortEnd = 18180','BPSRMobileFront.exe','StarSEA.exe','route_exclude_address','"bpsr-pc"','"127.0.0.1"','PhoneProfileConfirmed','CreateProfileServer','ValidateGeneratedConfigs','Sha256File')) { if (-not $engine.Contains($needle)) { throw ('Native relay invariant missing: ' + $needle) } }
           foreach ($forbidden in @('2022-blake3-aes-128-gcm','quickchart.io')) { if ($engine.Contains($forbidden) -or $ui.Contains($forbidden) -or $profile.Contains($forbidden)) { throw ('Forbidden native runtime dependency/transport found: ' + $forbidden) } }
           foreach ($needle in @('LocalSubnet','PrivateProfile = 2','HNetCfg.FwPolicy2','HNetCfg.FWRule','MakeNetworkPrivate','runas')) { if (-not $windows.Contains($needle)) { throw ('Native Windows integration invariant missing: ' + $needle) } }
-          foreach ($needle in @('MutexName','RestoreEventName','Application.Run(form)','--firewall-helper','--self-test','--ui-self-test')) { if (-not $program.Contains($needle)) { throw ('Native lifecycle invariant missing: ' + $needle) } }
+          foreach ($needle in @('GetNetworkCategory','HNetCfg.FwPolicy2','CurrentProfileTypes')) { if (-not $windowsTest.Contains($needle)) { throw ('Read-only Windows API self-test guard missing: ' + $needle) } }
+          foreach ($needle in @('MutexName','RestoreEventName','Application.Run(form)','--firewall-helper','--windows-api-self-test','--self-test','--ui-self-test')) { if (-not $program.Contains($needle)) { throw ('Native lifecycle invariant missing: ' + $needle) } }
           if ($program.Contains('powershell.exe') -or $engine.Contains('powershell.exe') -or $ui.Contains('powershell.exe')) { throw 'Native product runtime must not launch PowerShell.' }
           foreach ($needle in @('NotifyIcon','Minimize to Tray','Open BPSR Relay Manager','Stop Relay && Exit','Start Phone Setup','Show SFA QR','Copy SFA Link','StarSEA')) { if (-not $ui.Contains($needle)) { throw ('Native UI/tray invariant missing: ' + $needle) } }
           foreach ($needle in @('TcpListener','android-bpsr-relay.json','sing-box://import-remote-profile','Cache-Control: no-store')) { if (-not $profile.Contains($needle)) { throw ('Native phone setup server invariant missing: ' + $needle) } }
-          foreach ($needle in @('/target:winexe','System.Windows.Forms.dll','System.Web.Extensions.dll','Microsoft.CSharp.dll','VersionInfo.cs')) { if (-not $nativeBuilder.Contains($needle)) { throw ('Native build guard missing: ' + $needle) } }
+          foreach ($needle in @('/target:winexe','System.Windows.Forms.dll','System.Web.Extensions.dll','Microsoft.CSharp.dll','VersionInfo.cs','WindowsApiSelfTest.cs')) { if (-not $nativeBuilder.Contains($needle)) { throw ('Native build guard missing: ' + $needle) } }
           foreach ($needle in @('Native release package must not ship PowerShell runtime scripts','assets\qrcode.min.js','--ui-self-test','exactly one executable')) { if (-not $builder.Contains($needle)) { throw ('Native package guard missing: ' + $needle) } }
           foreach ($needle in @('field_test_passed','VersionInfo.cs','Require green Validate run for exact commit','BuildNativeManager.ps1','--self-test-root','BuildRelease.ps1','gh release create','--latest')) { if (-not $release.Contains($needle)) { throw ('Native stable release guard missing: ' + $needle) } }
           foreach ($needle in @('DPS-meter agnostic','authenticated SOCKS5','trusted home/private LAN','BPSR Relay Manager.exe','Prepare Relay','Start Relay','generated locally')) { if (-not $readme.Contains($needle)) { throw ('Documentation invariant missing: ' + $needle) } }
@@ -61,6 +63,12 @@ jobs:
         shell: powershell
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\BuildNativeManager.ps1' -OutputPath '.build\native\BPSR Relay Manager.exe'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test read-only Windows network and firewall APIs
+        shell: powershell
+        run: |
+          & '.\.build\native\BPSR Relay Manager.exe' '--windows-api-self-test'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test native manager UI and tray bootstrap
