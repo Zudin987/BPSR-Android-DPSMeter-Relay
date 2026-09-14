@@ -6,7 +6,9 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $sourceDir = Join-Path $root 'src\BpsrRelayManager'
 $versionPath = Join-Path $sourceDir 'VersionInfo.cs'
+$iconPath = Join-Path $root 'assets\BPSRRelayManager.ico'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw 'Native manager VersionInfo.cs is missing.' }
+if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw 'Native manager icon asset is missing.' }
 
 $versionText = Get-Content -LiteralPath $versionPath -Raw
 $match = [regex]::Match($versionText, 'public const string Version\s*=\s*"([^"]+)"')
@@ -37,6 +39,7 @@ $generatedProgram = Join-Path $compileDir 'Program.cs'
 $sources = @(
     $generatedProgram,
     (Join-Path $sourceDir 'VersionInfo.cs'),
+    (Join-Path $sourceDir 'Branding.cs'),
     (Join-Path $sourceDir 'WindowsIntegration.cs'),
     (Join-Path $sourceDir 'WindowsApiSelfTest.cs'),
     (Join-Path $sourceDir 'RelayEngine.cs'),
@@ -57,6 +60,7 @@ $args = @(
     '/target:winexe',
     '/optimize+',
     '/platform:anycpu',
+    ('/win32icon:' + $iconPath),
     '/reference:System.dll',
     '/reference:System.Core.dll',
     '/reference:System.Drawing.dll',
@@ -78,9 +82,11 @@ if ([string]$info.FileVersion -ne $versionNumeric) { throw ('Native manager file
 
 Write-Host ('Native manager: ' + $OutputPath)
 Write-Host ('Version: v' + $version)
+Write-Host ('Embedded icon: ' + $iconPath)
 
 [PSCustomObject]@{
     Version = $version
     VersionNumeric = $versionNumeric
     OutputPath = $OutputPath
+    IconPath = $iconPath
 }
