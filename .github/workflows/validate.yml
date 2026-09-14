@@ -112,3 +112,13 @@ jobs:
           if (@(Get-ChildItem -LiteralPath $root -Filter '*.exe' -File -Recurse).Count -ne 1) { throw 'Native package must contain exactly one executable.' }
           if (@(Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File -Recurse).Count -ne 0) { throw 'Native package must not contain PowerShell runtime scripts.' }
           Write-Host ('Clean native release package verified. SHA256=' + $actual)
+
+      - name: Upload native test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BPSR-Android-DPSMeter-Relay-v1.1.0-native-test
+          path: |
+            dist/BPSR-Android-DPSMeter-Relay.zip
+            dist/BPSR-Android-DPSMeter-Relay.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
