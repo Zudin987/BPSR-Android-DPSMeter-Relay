@@ -29,24 +29,24 @@ namespace BpsrRelayManager
             try
             {
                 string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (HasArg(args, "--firewall-helper"))
-                {
-                    return RunFirewallHelper(args);
-                }
+                if (HasArg(args, "--firewall-helper")) return RunFirewallHelper(args);
+
                 if (HasArg(args, "--self-test"))
                 {
-                    string temp = Path.Combine(Path.GetTempPath(), "bpsr-relay-native-selftest-" + Guid.NewGuid().ToString("N"));
-                    Directory.CreateDirectory(temp);
+                    string requestedRoot = GetArgValue(args, "--self-test-root");
+                    bool temporary = string.IsNullOrWhiteSpace(requestedRoot);
+                    string testRoot = temporary ? Path.Combine(Path.GetTempPath(), "bpsr-relay-native-selftest-" + Guid.NewGuid().ToString("N")) : Path.GetFullPath(requestedRoot);
+                    Directory.CreateDirectory(testRoot);
                     try
                     {
-                        RelayEngine engine = new RelayEngine(temp, delegate(string message) { Console.WriteLine(message); });
+                        RelayEngine engine = new RelayEngine(testRoot, delegate(string message) { Console.WriteLine(message); });
                         engine.RunSelfTest();
                         Console.WriteLine("NATIVE SELF-TEST PASS: config generation, pinned runtime verification and relay topology validation succeeded.");
                         return 0;
                     }
                     finally
                     {
-                        try { Directory.Delete(temp, true); } catch { }
+                        if (temporary) try { Directory.Delete(testRoot, true); } catch { }
                     }
                 }
 
@@ -54,10 +54,7 @@ namespace BpsrRelayManager
                 if (uiSelfTest)
                 {
                     RelayEngine uiEngine = new RelayEngine(root, delegate(string message) { });
-                    using (MainForm testForm = new MainForm(uiEngine, true))
-                    {
-                        testForm.RunUiSelfTest();
-                    }
+                    using (MainForm testForm = new MainForm(uiEngine, true)) testForm.RunUiSelfTest();
                     Console.WriteLine("UI SELF-TEST PASS: native Home/Details/Help layout and tray controls are present.");
                     return 0;
                 }
@@ -67,10 +64,7 @@ namespace BpsrRelayManager
                 {
                     if (!createdNew)
                     {
-                        try
-                        {
-                            using (EventWaitHandle evt = EventWaitHandle.OpenExisting(RestoreEventName)) { evt.Set(); }
-                        }
+                        try { using (EventWaitHandle evt = EventWaitHandle.OpenExisting(RestoreEventName)) evt.Set(); }
                         catch { }
                         return 0;
                     }
@@ -105,10 +99,7 @@ namespace BpsrRelayManager
             }
             catch (Exception ex)
             {
-                try
-                {
-                    MessageBox.Show(ex.Message, "BPSR Relay Manager could not start", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                try { MessageBox.Show(ex.Message, "BPSR Relay Manager could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 catch { }
                 return 1;
             }
