@@ -38,6 +38,7 @@ $sources = @(
     $generatedProgram,
     (Join-Path $sourceDir 'VersionInfo.cs'),
     (Join-Path $sourceDir 'WindowsIntegration.cs'),
+    (Join-Path $sourceDir 'WindowsApiSelfTest.cs'),
     (Join-Path $sourceDir 'RelayEngine.cs'),
     (Join-Path $sourceDir 'ProfileServer.cs'),
     (Join-Path $sourceDir 'MainForm.cs')
