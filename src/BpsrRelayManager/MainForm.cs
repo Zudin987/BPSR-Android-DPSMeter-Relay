@@ -16,13 +16,17 @@ namespace BpsrRelayManager
         private readonly Color _surface = Color.White;
         private readonly Color _surfaceSoft = Color.FromArgb(248, 250, 252);
         private readonly Color _text = Color.FromArgb(15, 23, 42);
-        private readonly Color _muted = Color.FromArgb(100, 116, 139);
-        private readonly Color _border = Color.FromArgb(218, 225, 235);
+        private readonly Color _muted = Color.FromArgb(71, 85, 105);
+        private readonly Color _border = Color.FromArgb(203, 213, 225);
         private readonly Color _primary = Color.FromArgb(37, 99, 235);
+        private readonly Color _primarySoft = Color.FromArgb(239, 246, 255);
+        private readonly Color _successSoft = Color.FromArgb(240, 253, 244);
+        private readonly Color _warningSoft = Color.FromArgb(255, 247, 237);
+        private readonly Color _dangerSoft = Color.FromArgb(254, 242, 242);
         private readonly Color _success = Color.FromArgb(21, 128, 61);
         private readonly Color _warning = Color.FromArgb(180, 83, 9);
         private readonly Color _danger = Color.FromArgb(185, 28, 28);
-        private readonly Color _neutral = Color.FromArgb(71, 85, 105);
+        private readonly Color _neutral = Color.FromArgb(51, 65, 85);
 
         private ComboBox _ip;
         private Button _prepare;
@@ -41,6 +45,9 @@ namespace BpsrRelayManager
         private Label _profileState;
         private Label _firewallState;
         private Label _nextAction;
+        private Label _overallState;
+        private Label _adapterInfo;
+        private ToolTip _toolTip;
         private TextBox _log;
         private TabControl _tabs;
         private TabPage _homeTab;
@@ -53,7 +60,6 @@ namespace BpsrRelayManager
         private ToolStripMenuItem _trayStop;
         private ProfileServer _profileServer;
         private bool _forceExit;
-        private bool _hiddenToTray;
         private bool _trayNoticeShown;
 
         public MainForm(RelayEngine engine, bool selfTest)
@@ -68,7 +74,7 @@ namespace BpsrRelayManager
             if (!_selfTest)
             {
                 _timer = new Timer();
-                _timer.Interval = 5000;
+                _timer.Interval = 3000;
                 _timer.Tick += delegate { UpdateStatus(); };
                 _timer.Start();
                 UpdateStatus();
@@ -80,7 +86,7 @@ namespace BpsrRelayManager
 
         private void InitializeForm()
         {
-            Text = "BPSR Android Relay";
+            Text = "BPSR Relay Manager";
             ClientSize = new Size(964, 690);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -94,12 +100,23 @@ namespace BpsrRelayManager
 
         private void BuildUi()
         {
-            Label title = MakeLabel("BPSR Android Relay", 24, 16, 650, 31, 17f, true, _text);
+            Label title = MakeLabel("BPSR Relay Manager", 24, 16, 650, 31, 17f, true, _text);
             Controls.Add(title);
-            Controls.Add(MakeLabel("Native Windows manager - use your phone with a compatible DPS meter", 27, 49, 650, 22, 9.25f, false, _muted));
+            Controls.Add(MakeLabel("Native Windows relay for Android BPSR + compatible PC DPS meters", 27, 49, 650, 22, 9.25f, false, _muted));
             Label version = MakeLabel("v" + _engine.ManagerVersion, 805, 22, 120, 24, 10f, true, _muted);
             version.TextAlign = ContentAlignment.MiddleRight;
             Controls.Add(version);
+            _overallState = MakeLabel("CHECKING", 744, 49, 181, 25, 9.25f, true, _neutral);
+            _overallState.TextAlign = ContentAlignment.MiddleCenter;
+            _overallState.BackColor = _surfaceSoft;
+            _overallState.BorderStyle = BorderStyle.FixedSingle;
+            Controls.Add(_overallState);
+
+            _toolTip = new ToolTip();
+            _toolTip.AutoPopDelay = 9000;
+            _toolTip.InitialDelay = 350;
+            _toolTip.ReshowDelay = 100;
+            _toolTip.ShowAlways = true;
 
             _tabs = new TabControl();
             _tabs.Location = new Point(24, 84);
@@ -120,31 +137,32 @@ namespace BpsrRelayManager
             Panel setup = new Panel(); setup.Location = new Point(14, 14); setup.Size = new Size(548, 522); setup.BackColor = _background; _homeTab.Controls.Add(setup);
             Panel address = Card(0, 0, 548, 70); AddCardTitle(address, "This PC", 7);
             _ip = new ComboBox(); _ip.Location = new Point(16, 35); _ip.Size = new Size(218, 26); _ip.DropDownStyle = ComboBoxStyle.DropDownList; _ip.SelectedIndexChanged += delegate { if (!_selfTest) UpdateStatus(); }; address.Controls.Add(_ip);
-            address.Controls.Add(MakeLabel("Usually leave this as-is.\r\nSame home network/router as your phone.", 250, 30, 280, 34, 9f, false, _muted)); setup.Controls.Add(address);
+            _toolTip.SetToolTip(_ip, "LAN IPv4 address Android will connect to. Usually leave the first auto-selected address.");
+            _adapterInfo = MakeLabel("Auto-selected LAN adapter.\r\nPhone must use the same router.", 250, 30, 280, 34, 9f, false, _muted); address.Controls.Add(_adapterInfo); setup.Controls.Add(address);
 
             Panel step1 = Card(0, 80, 548, 70); AddCardTitle(step1, "1. Prepare Relay", 10); step1.Controls.Add(MakeLabel("Download/verify the relay runtime and create the compatibility profile.", 16, 36, 350, 24, 9f, false, _muted));
-            _prepare = UiButton("Prepare Relay", 382, 32, 148, 30, true, false); _prepare.Click += delegate { PrepareRelayGuided(); }; step1.Controls.Add(_prepare); setup.Controls.Add(step1);
+            _prepare = UiButton("Prepare Relay", 382, 32, 148, 30, false, false); _prepare.Click += delegate { PrepareRelayGuided(); }; step1.Controls.Add(_prepare); _toolTip.SetToolTip(_prepare, "Download/verify the relay runtime and generate the current phone profile."); setup.Controls.Add(step1);
 
             Panel step2 = Card(0, 160, 548, 70); AddCardTitle(step2, "2. Allow Firewall", 10); step2.Controls.Add(MakeLabel("Allow your phone to reach this PC on the trusted Private LAN.", 16, 36, 350, 24, 9f, false, _muted));
-            _firewall = UiButton("Allow Firewall", 382, 32, 148, 30, false, false); _firewall.Click += delegate { AllowFirewallGuided(); }; step2.Controls.Add(_firewall); setup.Controls.Add(step2);
+            _firewall = UiButton("Allow Firewall", 382, 32, 148, 30, false, false); _firewall.Click += delegate { AllowFirewallGuided(); }; step2.Controls.Add(_firewall); _toolTip.SetToolTip(_firewall, "Windows will ask for Administrator approval. This only opens the relay to your trusted Private LAN."); setup.Controls.Add(step2);
 
             Panel step3 = Card(0, 240, 548, 102); AddCardTitle(step3, "3. Android Setup", 9); step3.Controls.Add(MakeLabel("Scan/import the current profile in SFA. The temporary setup server stops automatically.", 16, 34, 500, 23, 9f, false, _muted));
-            _phoneSetup = UiButton("Start Phone Setup", 16, 62, 180, 30, true, false); _phoneSetup.Click += delegate { StartPhoneSetupGuided(); }; step3.Controls.Add(_phoneSetup);
-            _qr = UiButton("Show SFA QR", 204, 62, 150, 30, false, false); _qr.Click += delegate { ShowQrGuided(); }; step3.Controls.Add(_qr);
-            _copyLink = UiButton("Copy SFA Link", 362, 62, 168, 30, false, false); _copyLink.Click += delegate { CopySfaLink(); }; step3.Controls.Add(_copyLink); setup.Controls.Add(step3);
+            _phoneSetup = UiButton("Start Phone Setup", 16, 62, 180, 30, false, false); _phoneSetup.Click += delegate { StartPhoneSetupGuided(); }; step3.Controls.Add(_phoneSetup); _toolTip.SetToolTip(_phoneSetup, "Temporarily serve the current SFA profile to your phone and open the local QR flow.");
+            _qr = UiButton("Show SFA QR", 204, 62, 150, 30, false, false); _qr.Click += delegate { ShowQrGuided(); }; step3.Controls.Add(_qr); _toolTip.SetToolTip(_qr, "Open the locally generated QR page for the active phone setup session.");
+            _copyLink = UiButton("Copy SFA Link", 362, 62, 168, 30, false, false); _copyLink.Click += delegate { CopySfaLink(); }; step3.Controls.Add(_copyLink); _toolTip.SetToolTip(_copyLink, "Copy the current local SFA import link instead of scanning the QR."); setup.Controls.Add(step3);
 
             Panel step4 = Card(0, 352, 548, 70); AddCardTitle(step4, "4. DPS Meter", 10); step4.Controls.Add(MakeLabel("Target StarSEA only. Never BPSRMobileFront.", 16, 37, 330, 22, 9.5f, true, _text));
             Button copyNotes = UiButton("Copy Setup Notes", 382, 32, 148, 30, false, false); copyNotes.Click += delegate { CopyDpsNotes(); }; step4.Controls.Add(copyNotes); setup.Controls.Add(step4);
 
             Panel step5 = Card(0, 432, 548, 90); AddCardTitle(step5, "5. Start & Play", 9); step5.Controls.Add(MakeLabel("Run Check if needed. Start Relay guides you if phone setup is unfinished.", 16, 34, 500, 23, 9f, false, _muted));
-            _check = UiButton("Run Check", 16, 57, 105, 27, false, false); _check.Click += delegate { RunCheck(); }; step5.Controls.Add(_check);
-            _start = UiButton("Start Relay", 129, 57, 134, 27, true, false); _start.Click += delegate { StartRelayGuided(); }; step5.Controls.Add(_start);
-            _stop = UiButton("Stop Relay", 271, 57, 108, 27, false, true); _stop.Click += delegate { StopRelayGuided(); }; step5.Controls.Add(_stop);
-            _trayButton = UiButton("Minimize to Tray", 387, 57, 143, 27, false, false); _trayButton.Click += delegate { MinimizeToTray(); }; step5.Controls.Add(_trayButton); setup.Controls.Add(step5);
+            _check = UiButton("Run Check", 16, 55, 105, 30, false, false); _check.Click += delegate { RunCheck(); }; step5.Controls.Add(_check); _toolTip.SetToolTip(_check, "Run a quick readiness check without starting the relay.");
+            _start = UiButton("Start Relay", 129, 55, 134, 30, false, false); _start.Click += delegate { StartRelayGuided(); }; step5.Controls.Add(_start); _toolTip.SetToolTip(_start, "Start the phone-facing relay and StarSEA process target.");
+            _stop = UiButton("Stop Relay", 271, 55, 108, 30, false, true); _stop.Click += delegate { StopRelayGuided(); }; step5.Controls.Add(_stop); _toolTip.SetToolTip(_stop, "Stop the active relay. This can interrupt BPSR if the phone is currently using it.");
+            _trayButton = UiButton("Minimize to Tray", 387, 55, 143, 30, false, false); _trayButton.Click += delegate { MinimizeToTray(); }; step5.Controls.Add(_trayButton); _toolTip.SetToolTip(_trayButton, "Hide this window while keeping the manager available from the system tray."); setup.Controls.Add(step5);
 
             Panel statusPanel = new Panel(); statusPanel.Location = new Point(578, 14); statusPanel.Size = new Size(316, 522); statusPanel.BackColor = _background; _homeTab.Controls.Add(statusPanel);
             Panel status = Card(0, 0, 316, 190); AddCardTitle(status, "Status", 10); _relayState = StatusRow(status, "Relay", 44); _runtimeState = StatusRow(status, "PC setup", 78); _profileState = StatusRow(status, "Phone profile", 112); _firewallState = StatusRow(status, "Firewall", 146); statusPanel.Controls.Add(status);
-            Panel next = Card(0, 202, 316, 108); AddCardTitle(next, "What to do next", 10); _nextAction = MakeLabel("Checking your setup...", 16, 43, 284, 52, 9.25f, false, _neutral); next.Controls.Add(_nextAction); statusPanel.Controls.Add(next);
+            Panel next = Card(0, 202, 316, 108); AddCardTitle(next, "What to do next", 10); _nextAction = MakeLabel("Checking your setup...", 16, 41, 284, 56, 9.5f, true, _neutral); next.Controls.Add(_nextAction); statusPanel.Controls.Add(next);
             Panel daily = Card(0, 322, 316, 100); AddCardTitle(daily, "Daily use", 10); daily.Controls.Add(MakeLabel("After first setup:\r\nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR", 16, 43, 284, 52, 9.25f, false, _neutral)); statusPanel.Controls.Add(daily);
             Panel target = Card(0, 434, 316, 88); target.Controls.Add(MakeLabel("DPS meter target", 16, 11, 200, 20, 9f, false, _muted)); target.Controls.Add(MakeLabel("StarSEA", 16, 38, 284, 30, 15f, true, _text)); statusPanel.Controls.Add(target);
         }
@@ -178,7 +196,7 @@ namespace BpsrRelayManager
 
         private void BuildTray()
         {
-            _notifyIcon = new NotifyIcon(); _notifyIcon.Text = "BPSR Android Relay"; _notifyIcon.Icon = SystemIcons.Application; _notifyIcon.Visible = !_selfTest;
+            _notifyIcon = new NotifyIcon(); _notifyIcon.Text = "BPSR Relay Manager - Relay stopped"; _notifyIcon.Icon = SystemIcons.Application; _notifyIcon.Visible = !_selfTest;
             ContextMenuStrip menu = new ContextMenuStrip();
             ToolStripMenuItem open = new ToolStripMenuItem("Open BPSR Relay Manager"); open.Click += delegate { RestoreFromTray(); }; menu.Items.Add(open);
             menu.Items.Add(new ToolStripSeparator());
@@ -364,14 +382,16 @@ namespace BpsrRelayManager
         private void UpdateStatus()
         {
             if (_selfTest) return;
+            string selectedIp = (_ip.Text ?? string.Empty).Trim();
+            UpdateAdapterSummary(selectedIp);
             bool running = _engine.IsRelayRunning();
             if (running)
             {
-                SetStatus(_relayState, "Running", _primary); SetStatus(_runtimeState, "Ready", _success); SetStatus(_profileState, "Ready", _success); SetStatus(_firewallState, "Ready at start", _success); _nextAction.Text = "Relay is running. Open BPSR on your phone and play."; SetButtonStates(true, true, true, true, false); UpdateTray(true); return;
+                SetStatus(_relayState, "Running", _success); SetStatus(_runtimeState, "Ready", _success); SetStatus(_profileState, "Ready", _success); SetStatus(_firewallState, "Ready", _success); _nextAction.Text = "Relay is running. Start SFA on your phone if needed, then open BPSR and play."; SetButtonStates(true, true, true, true, false); SetOverallState("RELAY RUNNING", _success, _successSoft); SetRecommendedAction(null); UpdateTray(true); return;
             }
-            string ip = (_ip.Text ?? string.Empty).Trim();
+            string ip = selectedIp;
             List<RelayProcessInfo> foreign = _engine.GetForeignRelayProcesses(); bool hasForeign = foreign.Count > 0;
-            SetStatus(_relayState, hasForeign ? (foreign.Count == 1 ? foreign[0].Name + ".exe" : foreign.Count + " old relays") : "Stopped", hasForeign ? _danger : _neutral);
+            SetStatus(_relayState, hasForeign ? (foreign.Count == 1 ? "Old relay found" : foreign.Count + " old relays") : "Stopped", hasForeign ? _danger : _neutral);
             bool runtime = _engine.RuntimeReady(); SetStatus(_runtimeState, runtime ? "Ready" : "Needs setup", runtime ? _success : _warning);
             bool profile = !string.IsNullOrWhiteSpace(ip) && _engine.GetProfilePcIp() == ip && _engine.IsLocalIp(ip); bool confirmed = profile && _engine.PhoneProfileConfirmed(); bool downloaded = profile && _engine.PhoneProfileDownloaded();
             SetStatus(_profileState, !profile ? (string.IsNullOrWhiteSpace(_engine.GetProfilePcIp()) ? "Missing" : "Needs update") : (confirmed ? "Ready" : (downloaded ? "Downloaded - confirm" : "Import needed")), !profile ? _warning : (confirmed ? _success : _warning));
@@ -382,7 +402,13 @@ namespace BpsrRelayManager
             else if (!firewall) _nextAction.Text = "Click Allow Firewall so your phone can connect on the trusted Private LAN.";
             else if (!confirmed) _nextAction.Text = _profileServer != null && _profileServer.Running ? "Phone setup is open. Scan the QR and import BPSR Relay in SFA." : "Click Start Phone Setup and import the current profile in SFA.";
             else _nextAction.Text = "Setup is ready. Click Start Relay.";
-            SetButtonStates(false, runtime, profile, firewall, hasForeign); UpdateTray(false);
+            Button recommended;
+            if (hasForeign) { SetOverallState("ACTION REQUIRED", _danger, _dangerSoft); recommended = _prepare; }
+            else if (!runtime || !profile) { SetOverallState("SETUP NEEDED", _warning, _warningSoft); recommended = _prepare; }
+            else if (!firewall) { SetOverallState("SETUP NEEDED", _warning, _warningSoft); recommended = _firewall; }
+            else if (!confirmed) { SetOverallState("FINISH PHONE SETUP", _warning, _warningSoft); recommended = _profileServer != null && _profileServer.Running ? _qr : _phoneSetup; }
+            else { SetOverallState("READY TO START", _primary, _primarySoft); recommended = _start; }
+            SetButtonStates(false, runtime, profile, firewall, hasForeign); SetRecommendedAction(recommended); UpdateTray(false);
             if (_profileServer != null && !_profileServer.Running) { _profileServer.Dispose(); _profileServer = null; }
         }
 
@@ -393,14 +419,60 @@ namespace BpsrRelayManager
 
         private void UpdateTray(bool running)
         {
-            if (_trayStatus == null) return; _trayStatus.Text = running ? "Relay: Running" : "Relay: Stopped"; _trayStart.Enabled = !running; _trayStop.Enabled = running;
+            if (_trayStatus == null) return; _trayStatus.Text = running ? "Relay: Running" : "Relay: Stopped"; _trayStart.Enabled = !running; _trayStop.Enabled = running; if (_notifyIcon != null) _notifyIcon.Text = running ? "BPSR Relay Manager - Relay running" : "BPSR Relay Manager - Relay stopped";
         }
 
-        private void SetStatus(Label label, string text, Color color) { label.Text = text; label.ForeColor = color; }
+        private void SetStatus(Label label, string text, Color color)
+        {
+            label.Text = "\u25CF " + text;
+            label.ForeColor = color;
+            if (_toolTip != null) _toolTip.SetToolTip(label, text);
+        }
+
+        private void SetOverallState(string text, Color foreground, Color background)
+        {
+            if (_overallState == null) return;
+            _overallState.Text = text;
+            _overallState.ForeColor = foreground;
+            _overallState.BackColor = background;
+            _overallState.BorderStyle = BorderStyle.FixedSingle;
+        }
+
+        private void UpdateAdapterSummary(string ip)
+        {
+            if (_adapterInfo == null) return;
+            if (string.IsNullOrWhiteSpace(ip) || !_engine.IsLocalIp(ip))
+            {
+                _adapterInfo.Text = "No active LAN adapter found.\r\nConnect Wi-Fi/Ethernet, then retry.";
+                _adapterInfo.ForeColor = _danger;
+                return;
+            }
+            string name = _engine.GetAdapterName(ip);
+            if (string.IsNullOrWhiteSpace(name) || string.Equals(name, "unknown", StringComparison.OrdinalIgnoreCase)) name = "Selected LAN adapter";
+            _adapterInfo.Text = name + "\r\nPhone must use the same router.";
+            _adapterInfo.ForeColor = _neutral;
+            if (_toolTip != null) _toolTip.SetToolTip(_ip, ip + " - " + name + ". Phone must be on the same trusted router.");
+        }
+
+        private void SetRecommendedAction(Button recommended)
+        {
+            Button[] flow = new Button[] { _prepare, _firewall, _phoneSetup, _qr, _start };
+            foreach (Button button in flow) if (button != null) StyleButton(button, button == recommended, false);
+        }
+
+        private void StyleButton(Button button, bool primary, bool danger)
+        {
+            if (button == null) return;
+            button.BackColor = primary ? _primary : _surface;
+            button.ForeColor = primary ? Color.White : (danger ? _danger : _text);
+            button.FlatAppearance.BorderColor = primary ? _primary : (danger ? Color.FromArgb(244, 190, 190) : _border);
+            button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(29, 78, 216) : (danger ? _dangerSoft : _surfaceSoft);
+            button.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(30, 64, 175) : (danger ? Color.FromArgb(254, 226, 226) : Color.FromArgb(241, 245, 249));
+        }
 
         public void MinimizeToTray()
         {
-            ShowInTaskbar = false; Hide(); _hiddenToTray = true;
+            ShowInTaskbar = false; Hide();
             if (!_trayNoticeShown && _notifyIcon != null)
             {
                 _trayNoticeShown = true; _notifyIcon.BalloonTipTitle = "BPSR Android Relay"; _notifyIcon.BalloonTipText = "Still running in the system tray. Click the tray icon to reopen it."; _notifyIcon.ShowBalloonTip(2500);
@@ -409,7 +481,7 @@ namespace BpsrRelayManager
 
         public void RestoreFromTray()
         {
-            if (IsDisposed) return; ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; BringToFront(); Activate(); _hiddenToTray = false;
+            if (IsDisposed) return; ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; BringToFront(); Activate();
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
@@ -444,6 +516,7 @@ namespace BpsrRelayManager
             if (_prepare.Text != "Prepare Relay" || _start.Text != "Start Relay" || _trayButton.Text != "Minimize to Tray") throw new InvalidOperationException("Primary native UI actions are missing.");
             if (_phoneSetup.Text != "Start Phone Setup" || _qr.Text != "Show SFA QR" || _copyLink.Text != "Copy SFA Link") throw new InvalidOperationException("Native SFA setup actions are missing.");
             if (_notifyIcon == null || _notifyIcon.ContextMenuStrip == null) throw new InvalidOperationException("Native tray integration is missing.");
+            if (_overallState == null || _adapterInfo == null || _toolTip == null) throw new InvalidOperationException("Native visibility/UX guidance controls are missing.");
             foreach (TabPage page in _tabs.TabPages) if (page.Width <= 0 || page.Height <= 0) throw new InvalidOperationException("Native UI layout is invalid.");
         }
 
@@ -454,6 +527,7 @@ namespace BpsrRelayManager
                 if (_timer != null) { _timer.Stop(); _timer.Dispose(); _timer = null; }
                 StopProfileServer();
                 if (_notifyIcon != null) { _notifyIcon.Visible = false; _notifyIcon.Dispose(); _notifyIcon = null; }
+                if (_toolTip != null) { _toolTip.Dispose(); _toolTip = null; }
             }
             base.Dispose(disposing);
         }
@@ -467,17 +541,17 @@ namespace BpsrRelayManager
 
         private Label StatusRow(Control parent, string title, int y)
         {
-            parent.Controls.Add(MakeLabel(title, 16, y, 135, 23, 9.25f, false, _muted)); Label value = MakeLabel("Checking...", 148, y, parent.Width - 164, 23, 9.5f, true, _neutral); value.TextAlign = ContentAlignment.MiddleRight; parent.Controls.Add(value); return value;
+            parent.Controls.Add(MakeLabel(title, 16, y, 108, 23, 9.25f, false, _muted)); Label value = MakeLabel("Checking...", 124, y, parent.Width - 140, 23, 9.25f, true, _neutral); value.TextAlign = ContentAlignment.MiddleRight; parent.Controls.Add(value); return value;
         }
 
         private Label MakeLabel(string text, int x, int y, int width, int height, float size, bool semibold, Color color)
         {
-            Label label = new Label(); label.Text = text; label.Location = new Point(x, y); label.Size = new Size(width, height); label.ForeColor = color; label.Font = new Font(semibold ? "Segoe UI Semibold" : "Segoe UI", size); label.AutoEllipsis = true; label.UseMnemonic = false; return label;
+            Label label = new Label(); label.Text = text; label.Location = new Point(x, y); label.Size = new Size(width, height); label.ForeColor = color; label.Font = new Font(semibold ? "Segoe UI Semibold" : "Segoe UI", size); label.AutoEllipsis = true; label.UseMnemonic = false; label.AccessibleName = text; return label;
         }
 
         private Button UiButton(string text, int x, int y, int width, int height, bool primary, bool danger)
         {
-            Button button = new Button(); button.Text = text; button.Location = new Point(x, y); button.Size = new Size(width, height); button.FlatStyle = FlatStyle.Flat; button.UseVisualStyleBackColor = false; button.BackColor = primary ? _primary : _surface; button.ForeColor = primary ? Color.White : (danger ? _danger : _text); button.FlatAppearance.BorderSize = 1; button.FlatAppearance.BorderColor = primary ? _primary : (danger ? Color.FromArgb(244, 190, 190) : _border); button.Font = new Font("Segoe UI Semibold", 9.25f); button.Cursor = Cursors.Hand; return button;
+            Button button = new Button(); button.Text = text; button.Location = new Point(x, y); button.Size = new Size(width, height); button.FlatStyle = FlatStyle.Flat; button.UseVisualStyleBackColor = false; button.FlatAppearance.BorderSize = 1; button.Font = new Font("Segoe UI Semibold", 9.25f); button.Cursor = Cursors.Hand; button.AccessibleName = text; StyleButton(button, primary, danger); return button;
         }
     }
 }
