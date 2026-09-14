@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to publish (example: 1.1.0)'
+        description: 'Stable version to publish (example: 1.1.1)'
         required: true
-        default: '1.1.0'
+        default: '1.1.1'
         type: string
       field_test_passed:
         description: 'Confirm real Android + Windows + SFA + BPSR + compatible DPS-meter field test passed'
@@ -34,7 +34,7 @@ jobs:
         run: |
           if ($env:GITHUB_REF_NAME -ne 'main') { throw 'Stable releases must be dispatched from the main branch.' }
           $version = '${{ inputs.version }}'.Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Stable version must be plain semver such as 1.1.0.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Stable version must be plain semver such as 1.1.1.' }
           if ('${{ inputs.field_test_passed }}' -ne 'YES') { throw 'Stable release blocked: the real Android/Windows/SFA/BPSR/compatible-DPS-meter field test has not been confirmed.' }
 
           $versionSource = Get-Content '.\src\BpsrRelayManager\VersionInfo.cs' -Raw
