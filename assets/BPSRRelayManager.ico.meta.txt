@@ -1,0 +1,2 @@
+embedded=true
+surfaces=exe,explorer,window,taskbar,alt-tab,tray
