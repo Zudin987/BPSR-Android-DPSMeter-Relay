@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$ManagerVersion = '1.0.5'
+$ManagerVersion = '1.0.6'
 $TestedSingBoxVersion = 'v1.13.19'
 $FrontPort = 10808
 $InternalPortStart = 18080
