@@ -20,8 +20,9 @@ jobs:
           ref: tmp/tray-explicit-patcher
 
       - name: Patch tray behavior and UI
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           def replace_once(text, old, new, label):
@@ -69,16 +70,17 @@ jobs:
           ui = ui_path.read_text(encoding='utf-8')
 
           tray_fn = r'''function Invoke-MinimizeManagerToTray {
-    if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {
-        Hide-BpsrRelayManagerWindow
-        return
-    }
+              if (Get-Command Hide-BpsrRelayManagerWindow -ErrorAction SilentlyContinue) {
+                  Hide-BpsrRelayManagerWindow
+                  return
+              }
 
-    # Fallback for direct script launches outside the packaged tray host.
-    $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
-}
+              # Fallback for direct script launches outside the packaged tray host.
+              $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+          }
 
-'''
+          '''
+          tray_fn = '\n'.join(line[10:] if line.startswith('          ') else line for line in tray_fn.splitlines()) + '\n'
           ui = replace_once(
               ui,
               '$form = New-Object System.Windows.Forms.Form',
@@ -87,9 +89,10 @@ jobs:
           )
 
           tray_button = r'''$script:btnTray = New-UiButton -Text 'Minimize to Tray' -X 387 -Y 57 -Width 143 -Height 27
-$script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })
-$step5.Controls.Add($script:btnTray)
-'''
+          $script:btnTray.Add_Click({ Invoke-MinimizeManagerToTray })
+          $step5.Controls.Add($script:btnTray)
+          '''
+          tray_button = '\n'.join(line[10:] if line.startswith('          ') else line for line in tray_button.splitlines()) + '\n'
           ui = replace_once(
               ui,
               "$script:btnStop.Add_Click({ Invoke-StopRelayGuided })\n$step5.Controls.Add($script:btnStop)\n$setupPanel.Controls.Add($step5)",
@@ -112,6 +115,7 @@ $step5.Controls.Add($script:btnTray)
           )
 
           ui_path.write_text(ui, encoding='utf-8', newline='\n')
+          PY
 
       - name: Commit fix
         shell: bash
