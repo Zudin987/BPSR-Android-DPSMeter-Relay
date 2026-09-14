@@ -30,6 +30,12 @@ namespace BpsrRelayManager
             {
                 string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 if (HasArg(args, "--firewall-helper")) return RunFirewallHelper(args);
+                if (HasArg(args, "--windows-api-self-test"))
+                {
+                    WindowsApiSelfTest.Run();
+                    Console.WriteLine("WINDOWS API SELF-TEST PASS: adapter category and firewall COM reads succeeded.");
+                    return 0;
+                }
 
                 if (HasArg(args, "--self-test"))
                 {
