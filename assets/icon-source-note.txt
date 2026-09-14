@@ -1,0 +1,2 @@
+BPSR Relay Manager application icon prepared from the project-owner supplied character artwork for the native v1.1.0 release.
+The compiled Windows executable embeds assets/BPSRRelayManager.ico and uses the same branding for the main window, taskbar/Alt-Tab and system tray.
