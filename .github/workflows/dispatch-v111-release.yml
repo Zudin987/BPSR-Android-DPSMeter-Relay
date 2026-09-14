@@ -1,0 +1,31 @@
+name: Dispatch v1.1.1 Release
+
+on:
+  push:
+    branches:
+      - ops/dispatch-v111-release
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch stable v1.1.1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/actions/workflows/release.yml/dispatches" \
+            --input - <<'JSON'
+          {
+            "ref": "main",
+            "inputs": {
+              "version": "1.1.1",
+              "field_test_passed": "YES"
+            }
+          }
+          JSON
