@@ -4,6 +4,12 @@ Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
 
 [Download latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Project website](https://zudin987.github.io/projects/android-relay/) · [Report an issue](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/issues)
 
+<p align="center">
+  <img src="docs/images/Relay.png" alt="BPSR Relay Manager showing relay setup, Android setup and DPS meter target" width="900">
+  <br>
+  <em>BPSR Relay Manager</em>
+</p>
+
 ## Requirements
 
 - Windows PC and Android phone on the same trusted private network.
