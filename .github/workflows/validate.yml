@@ -68,8 +68,8 @@ jobs:
       - name: Test read-only Windows network and firewall APIs
         shell: powershell
         run: |
-          & '.\.build\native\BPSR Relay Manager.exe' '--windows-api-self-test'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process -FilePath '.\.build\native\BPSR Relay Manager.exe' -ArgumentList '--windows-api-self-test' -NoNewWindow -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw ('Windows network/firewall API self-test failed with exit code ' + $process.ExitCode) }
 
       - name: Test native manager UI and tray bootstrap
         shell: powershell

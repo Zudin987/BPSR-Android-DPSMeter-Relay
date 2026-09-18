@@ -5,9 +5,28 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 namespace BpsrRelayManager
 {
+    // GetAdapterId returns a native GUID. Calling it through dynamic/IDispatch
+    // can fail with E_INVALIDARG while Automation tries to marshal the GUID.
+    // Use the SDK's INetworkConnection vtable order for this dual interface.
+    [ComImport]
+    [Guid("DCB00005-570F-4A9B-8D69-199FDBA5723B")]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    internal interface INetworkConnection
+    {
+        [return: MarshalAs(UnmanagedType.Interface)]
+        object GetNetwork();
+        bool IsConnectedToInternet { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        bool IsConnected { [return: MarshalAs(UnmanagedType.VariantBool)] get; }
+        int GetConnectivity();
+        Guid GetConnectionId();
+        Guid GetAdapterId();
+        int GetDomainType();
+    }
+
     internal sealed class LanAddress
     {
         public string Address;
@@ -92,8 +111,8 @@ namespace BpsrRelayManager
                 if (!Guid.TryParse(adapterId, out expected)) return "Unknown";
                 foreach (object raw in connections)
                 {
-                    dynamic connection = raw;
-                    Guid actual = (Guid)connection.GetAdapterId();
+                    INetworkConnection connection = (INetworkConnection)raw;
+                    Guid actual = connection.GetAdapterId();
                     if (actual != expected) continue;
                     dynamic network = connection.GetNetwork();
                     int category = (int)network.GetCategory();
@@ -114,8 +133,8 @@ namespace BpsrRelayManager
             if (!Guid.TryParse(adapterId, out expected)) throw new InvalidOperationException("The selected Windows adapter ID is invalid.");
             foreach (object raw in connections)
             {
-                dynamic connection = raw;
-                Guid actual = (Guid)connection.GetAdapterId();
+                INetworkConnection connection = (INetworkConnection)raw;
+                Guid actual = connection.GetAdapterId();
                 if (actual != expected) continue;
                 dynamic network = connection.GetNetwork();
                 int category = (int)network.GetCategory();
@@ -187,7 +206,9 @@ namespace BpsrRelayManager
                 string ports = Convert.ToString(rule.LocalPorts) ?? string.Empty;
                 string local = Convert.ToString(rule.LocalAddresses) ?? string.Empty;
                 string remote = Convert.ToString(rule.RemoteAddresses) ?? string.Empty;
-                return ContainsCsv(ports, "10808") && ContainsCsv(local, ip) && (ContainsCsv(remote, "LocalSubnet") || ContainsCsv(remote, "LocalSubnet4"));
+                // Windows can return a single IPv4 address with an explicit host mask.
+                bool selectedHost = ContainsCsv(local, ip) || ContainsCsv(local, ip + "/32") || ContainsCsv(local, ip + "/255.255.255.255");
+                return ContainsCsv(ports, "10808") && selectedHost && (ContainsCsv(remote, "LocalSubnet") || ContainsCsv(remote, "LocalSubnet4"));
             }
             catch { return false; }
         }

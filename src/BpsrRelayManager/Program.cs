@@ -127,15 +127,17 @@ namespace BpsrRelayManager
             string ip = GetArgValue(args, "--ip");
             string adapterId = GetArgValue(args, "--adapter");
             if (string.IsNullOrWhiteSpace(ip) || string.IsNullOrWhiteSpace(adapterId)) throw new ArgumentException("Firewall helper arguments are incomplete.");
+            string step = "selecting the Private network";
             try
             {
                 WindowsIntegration.MakeNetworkPrivate(adapterId);
+                step = "creating the TCP/UDP firewall rules";
                 WindowsIntegration.InstallFirewallRules(ip);
                 return 0;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "Could not allow phone connection", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Windows failed while " + step + ".\r\n\r\n" + ex.Message + "\r\nError: 0x" + ex.HResult.ToString("X8"), "Could not allow phone connection", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
         }
