@@ -95,6 +95,7 @@ namespace BpsrRelayManager
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = true;
+            AutoScroll = true;
             BackColor = _background;
             Font = new Font("Segoe UI", 9.25f);
             AutoScaleMode = AutoScaleMode.Dpi;
