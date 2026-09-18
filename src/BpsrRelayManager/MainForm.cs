@@ -377,7 +377,7 @@ namespace BpsrRelayManager
             prompt.BackColor = _background;
             prompt.Font = Font;
             prompt.AutoScaleMode = AutoScaleMode.Dpi;
-            Branding.Apply(prompt);
+            prompt.Icon = Icon;
             prompt.Controls.Add(MakeLabel("Is this phone profile imported in SFA?", 20, 18, 480, 28, 12f, true, _text));
             string explanation = downloaded ? "The profile was downloaded. Check that you imported it in SFA." : "Open Phone Setup to import the current BPSR Relay profile in SFA.";
             prompt.Controls.Add(MakeLabel(explanation, 20, 58, 480, 42, 9.25f, false, _neutral));
