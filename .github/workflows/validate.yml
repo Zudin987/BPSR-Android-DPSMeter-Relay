@@ -74,8 +74,17 @@ jobs:
       - name: Test native manager UI and tray bootstrap
         shell: powershell
         run: |
-          & '.\.build\native\BPSR Relay Manager.exe' '--ui-self-test'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process -FilePath '.\.build\native\BPSR Relay Manager.exe' -ArgumentList '--ui-self-test' -NoNewWindow -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw ('UI self-test failed with exit code ' + $process.ExitCode) }
+          .\scripts\CaptureUiPreviews.ps1
+
+      - name: Upload UI previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-ui-previews
+          path: .build/ui-previews/*.png
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run native relay self-test against pinned sing-box
         shell: powershell
@@ -116,7 +125,7 @@ jobs:
       - name: Upload native test package
         uses: actions/upload-artifact@v4
         with:
-          name: BPSR-Android-DPSMeter-Relay-v1.1.0-native-test
+          name: BPSR-Android-DPSMeter-Relay-test-package
           path: |
             dist/BPSR-Android-DPSMeter-Relay.zip
             dist/BPSR-Android-DPSMeter-Relay.zip.sha256
