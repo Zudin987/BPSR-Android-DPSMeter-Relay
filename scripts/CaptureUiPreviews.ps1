@@ -28,8 +28,11 @@ function Save-Preview([System.Windows.Forms.Form]$Window, [string]$Name) {
 }
 
 try {
-    $engine = [Activator]::CreateInstance($engineType, $flags, $null, @($testRoot, $null), $null)
-    $form = [Activator]::CreateInstance($formType, $flags, $null, @($engine, $true), $null)
+    $engineConstructor = $engineType.GetConstructor([type[]]@([string], [Action[string]]))
+    $engine = $engineConstructor.Invoke([object[]]@([string]$testRoot, $null))
+    $formConstructor = $formType.GetConstructor([type[]]@($engineType, [bool]))
+    $form = $formConstructor.Invoke([object[]]@($engine, $true))
+    $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $Executable).Path)
     try {
         $formType.GetMethod('RunUiSelfTest', $flags).Invoke($form, @()) | Out-Null
         Save-Preview $form 'home-100'
