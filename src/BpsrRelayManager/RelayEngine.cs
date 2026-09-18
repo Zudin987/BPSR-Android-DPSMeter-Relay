@@ -229,7 +229,8 @@ namespace BpsrRelayManager
             string exe = Process.GetCurrentProcess().MainModule.FileName;
             Log("Requesting Administrator permission for Private-LAN TCP+UDP relay rules on " + ip + ":" + FrontPort + "...");
             int exit = WindowsIntegration.RunElevatedFirewallHelper(exe, ip, item.AdapterId);
-            if (exit != 0) throw new InvalidOperationException("Windows could not create the Private-network relay rules.");
+            // The elevated helper already shows the precise failure. Do not show a second generic error.
+            if (exit != 0) { Log("Firewall setup did not finish. See the Administrator helper error message."); return; }
             if (!FirewallReady(ip)) throw new InvalidOperationException("The Private-network TCP+UDP firewall rules could not be verified after setup.");
             Log("Firewall ready: selected network Private; TCP+UDP; selected IP only; LocalSubnet remote only.");
         }

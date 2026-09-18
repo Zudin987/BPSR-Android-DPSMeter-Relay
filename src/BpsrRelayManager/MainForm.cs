@@ -1,9 +1,11 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace BpsrRelayManager
@@ -61,6 +63,7 @@ namespace BpsrRelayManager
         private ProfileServer _profileServer;
         private bool _forceExit;
         private bool _trayNoticeShown;
+        private bool _busy;
 
         public MainForm(RelayEngine engine, bool selfTest)
         {
@@ -102,7 +105,7 @@ namespace BpsrRelayManager
         {
             Label title = MakeLabel("BPSR Relay Manager", 24, 16, 650, 31, 17f, true, _text);
             Controls.Add(title);
-            Controls.Add(MakeLabel("Native Windows relay for Android BPSR + compatible PC DPS meters", 27, 49, 650, 22, 9.25f, false, _muted));
+            Controls.Add(MakeLabel("Play BPSR on Android with your compatible PC DPS meter", 27, 49, 650, 22, 9.25f, false, _muted));
             Label version = MakeLabel("v" + _engine.ManagerVersion, 805, 22, 120, 24, 10f, true, _muted);
             version.TextAlign = ContentAlignment.MiddleRight;
             Controls.Add(version);
@@ -140,13 +143,13 @@ namespace BpsrRelayManager
             _toolTip.SetToolTip(_ip, "LAN IPv4 address Android will connect to. Usually leave the first auto-selected address.");
             _adapterInfo = MakeLabel("Auto-selected LAN adapter.\r\nPhone must use the same router.", 250, 30, 280, 34, 9f, false, _muted); address.Controls.Add(_adapterInfo); setup.Controls.Add(address);
 
-            Panel step1 = Card(0, 80, 548, 70); AddCardTitle(step1, "1. Prepare Relay", 10); step1.Controls.Add(MakeLabel("Download/verify the relay runtime and create the compatibility profile.", 16, 36, 350, 24, 9f, false, _muted));
+            Panel step1 = Card(0, 80, 548, 70); AddCardTitle(step1, "1. Prepare Relay", 10); step1.Controls.Add(MakeLabel("Prepare the relay and phone profile.", 16, 36, 350, 24, 9f, false, _muted));
             _prepare = UiButton("Prepare Relay", 382, 32, 148, 30, false, false); _prepare.Click += delegate { PrepareRelayGuided(); }; step1.Controls.Add(_prepare); _toolTip.SetToolTip(_prepare, "Download/verify the relay runtime and generate the current phone profile."); setup.Controls.Add(step1);
 
-            Panel step2 = Card(0, 160, 548, 70); AddCardTitle(step2, "2. Allow Firewall", 10); step2.Controls.Add(MakeLabel("Allow your phone to reach this PC on the trusted Private LAN.", 16, 36, 350, 24, 9f, false, _muted));
+            Panel step2 = Card(0, 160, 548, 70); AddCardTitle(step2, "2. Allow Firewall", 10); step2.Controls.Add(MakeLabel("Approve Windows access on your private LAN.", 16, 36, 350, 24, 9f, false, _muted));
             _firewall = UiButton("Allow Firewall", 382, 32, 148, 30, false, false); _firewall.Click += delegate { AllowFirewallGuided(); }; step2.Controls.Add(_firewall); _toolTip.SetToolTip(_firewall, "Windows will ask for Administrator approval. This only opens the relay to your trusted Private LAN."); setup.Controls.Add(step2);
 
-            Panel step3 = Card(0, 240, 548, 102); AddCardTitle(step3, "3. Android Setup", 9); step3.Controls.Add(MakeLabel("Scan/import the current profile in SFA. The temporary setup server stops automatically.", 16, 34, 500, 23, 9f, false, _muted));
+            Panel step3 = Card(0, 240, 548, 102); AddCardTitle(step3, "3. Android Setup", 9); step3.Controls.Add(MakeLabel("Import the profile in SFA on your phone.", 16, 34, 500, 23, 9f, false, _muted));
             _phoneSetup = UiButton("Start Phone Setup", 16, 62, 180, 30, false, false); _phoneSetup.Click += delegate { StartPhoneSetupGuided(); }; step3.Controls.Add(_phoneSetup); _toolTip.SetToolTip(_phoneSetup, "Temporarily serve the current SFA profile to your phone and open the local QR flow.");
             _qr = UiButton("Show SFA QR", 204, 62, 150, 30, false, false); _qr.Click += delegate { ShowQrGuided(); }; step3.Controls.Add(_qr); _toolTip.SetToolTip(_qr, "Open the locally generated QR page for the active phone setup session.");
             _copyLink = UiButton("Copy SFA Link", 362, 62, 168, 30, false, false); _copyLink.Click += delegate { CopySfaLink(); }; step3.Controls.Add(_copyLink); _toolTip.SetToolTip(_copyLink, "Copy the current local SFA import link instead of scanning the QR."); setup.Controls.Add(step3);
@@ -154,7 +157,7 @@ namespace BpsrRelayManager
             Panel step4 = Card(0, 352, 548, 70); AddCardTitle(step4, "4. DPS Meter", 10); step4.Controls.Add(MakeLabel("Target StarSEA only. Never BPSRMobileFront.", 16, 37, 330, 22, 9.5f, true, _text));
             Button copyNotes = UiButton("Copy Setup Notes", 382, 32, 148, 30, false, false); copyNotes.Click += delegate { CopyDpsNotes(); }; step4.Controls.Add(copyNotes); setup.Controls.Add(step4);
 
-            Panel step5 = Card(0, 432, 548, 90); AddCardTitle(step5, "5. Start & Play", 9); step5.Controls.Add(MakeLabel("Run Check if needed. Start Relay guides you if phone setup is unfinished.", 16, 34, 500, 23, 9f, false, _muted));
+            Panel step5 = Card(0, 432, 548, 90); AddCardTitle(step5, "5. Start & Play", 9); step5.Controls.Add(MakeLabel("Start the relay, then open SFA and BPSR on your phone.", 16, 34, 500, 23, 9f, false, _muted));
             _check = UiButton("Run Check", 16, 55, 105, 30, false, false); _check.Click += delegate { RunCheck(); }; step5.Controls.Add(_check); _toolTip.SetToolTip(_check, "Run a quick readiness check without starting the relay.");
             _start = UiButton("Start Relay", 129, 55, 134, 30, false, false); _start.Click += delegate { StartRelayGuided(); }; step5.Controls.Add(_start); _toolTip.SetToolTip(_start, "Start the phone-facing relay and StarSEA process target.");
             _stop = UiButton("Stop Relay", 271, 55, 108, 30, false, true); _stop.Click += delegate { StopRelayGuided(); }; step5.Controls.Add(_stop); _toolTip.SetToolTip(_stop, "Stop the active relay. This can interrupt BPSR if the phone is currently using it.");
@@ -163,7 +166,7 @@ namespace BpsrRelayManager
             Panel statusPanel = new Panel(); statusPanel.Location = new Point(578, 14); statusPanel.Size = new Size(316, 522); statusPanel.BackColor = _background; _homeTab.Controls.Add(statusPanel);
             Panel status = Card(0, 0, 316, 190); AddCardTitle(status, "Status", 10); _relayState = StatusRow(status, "Relay", 44); _runtimeState = StatusRow(status, "PC setup", 78); _profileState = StatusRow(status, "Phone profile", 112); _firewallState = StatusRow(status, "Firewall", 146); statusPanel.Controls.Add(status);
             Panel next = Card(0, 202, 316, 108); AddCardTitle(next, "What to do next", 10); _nextAction = MakeLabel("Checking your setup...", 16, 41, 284, 56, 9.5f, true, _neutral); next.Controls.Add(_nextAction); statusPanel.Controls.Add(next);
-            Panel daily = Card(0, 322, 316, 100); AddCardTitle(daily, "Daily use", 10); daily.Controls.Add(MakeLabel("After first setup:\r\nPC Start Relay  ->  Phone Start SFA  ->  Open BPSR", 16, 43, 284, 52, 9.25f, false, _neutral)); statusPanel.Controls.Add(daily);
+            Panel daily = Card(0, 322, 316, 100); AddCardTitle(daily, "Daily use", 10); daily.Controls.Add(MakeLabel("1. PC: Start Relay\r\n2. Phone: Start SFA, then open BPSR", 16, 43, 284, 52, 9.25f, false, _neutral)); statusPanel.Controls.Add(daily);
             Panel target = Card(0, 434, 316, 88); target.Controls.Add(MakeLabel("DPS meter target", 16, 11, 200, 20, 9f, false, _muted)); target.Controls.Add(MakeLabel("StarSEA", 16, 38, 284, 30, 15f, true, _text)); statusPanel.Controls.Add(target);
         }
 
@@ -228,25 +231,29 @@ namespace BpsrRelayManager
             return value;
         }
 
-        private void PrepareRelayGuided()
+        private async void PrepareRelayGuided()
         {
+            if (_busy) return;
             try
             {
-                _prepare.Enabled = false; _prepare.Text = "Preparing..."; Application.DoEvents();
                 string ip = SelectedIp();
-                try { _engine.PrepareRelay(ip); }
+                BeginSetupAction(_prepare, "Preparing...", "Preparing the relay and phone profile. The first download may take a moment.");
+                StopProfileServer();
+                bool retry = false;
+                try { await Task.Run(delegate { _engine.PrepareRelay(ip); }); }
                 catch (Exception ex)
                 {
                     if (ex.Message.IndexOf("duplicate", StringComparison.OrdinalIgnoreCase) >= 0 || ex.Message.IndexOf("Foreign", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         if (!CloseOldRelaysPrompt()) return;
-                        _engine.PrepareRelay(ip);
+                        retry = true;
                     }
                     else throw;
                 }
+                if (retry) await Task.Run(delegate { _engine.PrepareRelay(ip); });
             }
             catch (Exception ex) { ShowFriendlyError("Could not prepare relay", ex); }
-            finally { _prepare.Text = "Prepare Relay"; UpdateStatus(); }
+            finally { EndSetupAction(_prepare, "Prepare Relay"); }
         }
 
         private bool CloseOldRelaysPrompt()
@@ -263,11 +270,43 @@ namespace BpsrRelayManager
             return true;
         }
 
-        private void AllowFirewallGuided()
+        private async void AllowFirewallGuided()
         {
-            try { _engine.AllowFirewall(SelectedIp()); }
+            if (_busy) return;
+            try
+            {
+                string ip = SelectedIp();
+                BeginSetupAction(_firewall, "Allowing...", "Approve the Windows Administrator prompt to allow your phone connection.");
+                await Task.Run(delegate { _engine.AllowFirewall(ip); });
+            }
+            catch (Win32Exception ex)
+            {
+                if (ex.NativeErrorCode == 1223) _engine.Log("Administrator prompt cancelled. Click Allow Firewall when ready.");
+                else ShowFriendlyError("Could not allow connection", ex);
+            }
             catch (Exception ex) { ShowFriendlyError("Could not allow connection", ex); }
-            finally { UpdateStatus(); }
+            finally { EndSetupAction(_firewall, "Allow Firewall"); }
+        }
+
+        private void BeginSetupAction(Button button, string caption, string guidance)
+        {
+            _busy = true;
+            button.Text = caption;
+            _tabs.Enabled = false;
+            _notifyIcon.ContextMenuStrip.Enabled = false;
+            UseWaitCursor = true;
+            _nextAction.Text = guidance;
+            SetOverallState("SETUP IN PROGRESS", _primary, _primarySoft);
+        }
+
+        private void EndSetupAction(Button button, string caption)
+        {
+            _busy = false;
+            button.Text = caption;
+            _tabs.Enabled = true;
+            _notifyIcon.ContextMenuStrip.Enabled = true;
+            UseWaitCursor = false;
+            UpdateStatus();
         }
 
         private void StartPhoneSetupGuided()
@@ -313,8 +352,8 @@ namespace BpsrRelayManager
                 if (!_engine.PhoneProfileConfirmed())
                 {
                     bool downloaded = _engine.PhoneProfileDownloaded();
-                    string text = downloaded ? "The current profile was downloaded, but Windows cannot verify that SFA imported it.\r\n\r\nYes: open Phone Setup again.\r\nNo: I checked SFA and this exact profile is imported; remember it and start.\r\nCancel: do nothing." : "This PC cannot confirm that the current BPSR Relay profile is imported in SFA.\r\n\r\nYes: open Phone Setup now.\r\nNo: I already imported this exact current profile; remember it and start.\r\nCancel: do nothing.";
-                    DialogResult choice = MessageBox.Show(text, "Finish phone setup first", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Information);
+                    DialogResult choice;
+                    using (Form prompt = CreatePhoneSetupPrompt(downloaded)) choice = prompt.ShowDialog(this);
                     if (choice == DialogResult.Yes) { StartPhoneSetupGuided(); return; }
                     if (choice == DialogResult.No) _engine.MarkPhoneProfileConfirmed("user-confirmed-manual-import"); else return;
                 }
@@ -323,6 +362,36 @@ namespace BpsrRelayManager
             }
             catch (Exception ex) { ShowFriendlyError("Could not start relay", ex); }
             finally { UpdateStatus(); }
+        }
+
+        private Form CreatePhoneSetupPrompt(bool downloaded)
+        {
+            Form prompt = new Form();
+            prompt.Text = "Finish phone setup";
+            prompt.ClientSize = new Size(520, 214);
+            prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+            prompt.StartPosition = FormStartPosition.CenterParent;
+            prompt.MaximizeBox = false;
+            prompt.MinimizeBox = false;
+            prompt.ShowInTaskbar = false;
+            prompt.BackColor = _background;
+            prompt.Font = Font;
+            prompt.AutoScaleMode = AutoScaleMode.Dpi;
+            Branding.Apply(prompt);
+            prompt.Controls.Add(MakeLabel("Is this phone profile imported in SFA?", 20, 18, 480, 28, 12f, true, _text));
+            string explanation = downloaded ? "The profile was downloaded. Check that you imported it in SFA." : "Open Phone Setup to import the current BPSR Relay profile in SFA.";
+            prompt.Controls.Add(MakeLabel(explanation, 20, 58, 480, 42, 9.25f, false, _neutral));
+            prompt.Controls.Add(MakeLabel("Choose Already Imported only after checking the current profile on your phone. The relay will then start.", 20, 104, 480, 44, 9.25f, false, _muted));
+            Button setup = UiButton("Open Phone Setup", 20, 164, 176, 32, true, false);
+            setup.DialogResult = DialogResult.Yes;
+            Button imported = UiButton("Already Imported", 206, 164, 176, 32, false, false);
+            imported.DialogResult = DialogResult.No;
+            Button cancel = UiButton("Cancel", 392, 164, 108, 32, false, false);
+            cancel.DialogResult = DialogResult.Cancel;
+            prompt.Controls.Add(setup); prompt.Controls.Add(imported); prompt.Controls.Add(cancel);
+            prompt.AcceptButton = setup;
+            prompt.CancelButton = cancel;
+            return prompt;
         }
 
         private void StopRelayGuided()
@@ -381,7 +450,7 @@ namespace BpsrRelayManager
 
         private void UpdateStatus()
         {
-            if (_selfTest) return;
+            if (_selfTest || _busy) return;
             string selectedIp = (_ip.Text ?? string.Empty).Trim();
             UpdateAdapterSummary(selectedIp);
             bool running = _engine.IsRelayRunning();
@@ -486,6 +555,7 @@ namespace BpsrRelayManager
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_busy && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; return; }
             if (_forceExit) { StopProfileServer(); return; }
             if (_engine.IsRelayRunning())
             {

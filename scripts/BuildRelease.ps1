@@ -63,8 +63,8 @@ $privateForbidden = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Where-O
 })
 if ($privateForbidden.Count -gt 0) { throw ('Release staging contains runtime/private files: ' + (($privateForbidden.FullName) -join ', ')) }
 
-& (Join-Path $stage 'BPSR Relay Manager.exe') '--ui-self-test'
-if ($LASTEXITCODE -ne 0) { throw ('Native packaged UI self-test failed with exit code ' + $LASTEXITCODE + '.') }
+$uiTest = Start-Process -FilePath (Join-Path $stage 'BPSR Relay Manager.exe') -ArgumentList '--ui-self-test' -NoNewWindow -Wait -PassThru
+if ($uiTest.ExitCode -ne 0) { throw ('Native packaged UI self-test failed with exit code ' + $uiTest.ExitCode + '.') }
 
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 if (Test-Path -LiteralPath $hashPath) { Remove-Item -LiteralPath $hashPath -Force }
@@ -82,8 +82,8 @@ try {
     foreach ($relative in $requiredRelative) { if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot $relative) -PathType Leaf)) { throw ('Final release ZIP is missing: ' + $relative) } }
     if (@(Get-ChildItem -LiteralPath $archiveRoot -Filter '*.exe' -File -Recurse).Count -ne 1) { throw 'Final release ZIP must contain exactly one executable.' }
     if (@(Get-ChildItem -LiteralPath $archiveRoot -Filter '*.ps1' -File -Recurse).Count -ne 0) { throw 'Final native release ZIP unexpectedly contains PowerShell scripts.' }
-    & (Join-Path $archiveRoot 'BPSR Relay Manager.exe') '--ui-self-test'
-    if ($LASTEXITCODE -ne 0) { throw ('Final packaged native UI self-test failed with exit code ' + $LASTEXITCODE + '.') }
+    $uiTest = Start-Process -FilePath (Join-Path $archiveRoot 'BPSR Relay Manager.exe') -ArgumentList '--ui-self-test' -NoNewWindow -Wait -PassThru
+    if ($uiTest.ExitCode -ne 0) { throw ('Final packaged native UI self-test failed with exit code ' + $uiTest.ExitCode + '.') }
 }
 finally {
     if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force -ErrorAction SilentlyContinue }
