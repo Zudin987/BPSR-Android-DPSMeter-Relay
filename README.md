@@ -1,67 +1,41 @@
 # BPSR Android DPSMeter Relay
 
-Windows helper for using a **PC BPSR DPS meter with BPSR running on Android**.
+Windows helper that forwards **Blue Protocol: Star Resonance combat traffic from an Android phone to a compatible PC DPS meter**. The relay does not calculate DPS itself.
 
 [Download latest release](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Project website](https://zudin987.github.io/projects/android-relay/)
 
 <p align="center">
-  <img src="docs/images/Relay.png" alt="BPSR Relay Manager showing relay setup, Android setup and DPS meter target" width="900">
-  <br>
-  <em>BPSR Relay Manager</em>
+  <img src="docs/images/Relay.png" alt="BPSR Relay Manager with relay and phone setup controls" width="900">
 </p>
 
 ## Requirements
 
-- Windows PC and Android phone on the same trusted private network.
-- SFA (sing-box for Android) on the phone.
-- A separate compatible Windows BPSR DPS meter.
-- Administrator approval for the manager's Windows firewall rule.
+- Windows PC and Android phone on the **same trusted private network**.
+- SFA (sing-box for Android) installed on the phone.
+- A separate Windows DPS meter compatible with BPSR traffic from **StarSEA**.
+- Administrator approval to create the Windows firewall rule.
 
-## Use
+## Get started
 
-1. [Download the latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip).
-2. Extract the whole ZIP and run `BPSR Relay Manager.exe`.
-3. Select the PC Ethernet/Wi-Fi address connected to the same router as the phone.
-4. Click **Prepare Relay** -> **Allow Firewall** -> **Start Phone Setup**.
-5. In Android SFA, scan/import the QR profile and route **BPSR only** through it.
-6. Click **Start Relay** on the PC, start SFA on the phone, then open BPSR.
-7. In your compatible DPS meter, use **StarSEA** as the BPSR capture/process target.
+1. [Download the latest ZIP](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest/download/BPSR-Android-DPSMeter-Relay.zip). Extract **everything**, then run `BPSR Relay Manager.exe`.
+2. Choose the PC address on the same network as your phone. In order, select **Prepare Relay → Allow Firewall → Start Phone Setup**.
+3. Import the local QR profile into SFA and route **BPSR only** through it.
+4. Select **Start Relay** on the PC, start SFA on the phone, then open BPSR.
+5. In your Windows DPS meter, select **StarSEA** as the capture/process target, **not** `BPSRMobileFront`.
 
-Daily use is normally:
+For daily use: **Start Relay on PC → Start SFA on phone → Open BPSR**. The manager's tray menu can reopen it, start or stop the relay, or exit.
 
-**PC Start Relay -> Android Start SFA -> Open BPSR**
+## Important network safety
 
-Use **Minimize to Tray** when you want the manager out of the taskbar while keeping it available. The tray menu can reopen the manager, start/stop the relay, or exit the manager.
+- Use this tool **only on a trusted home/private LAN**. Never port-forward port `10808`.
+- The phone-to-PC hop uses authenticated SOCKS5 but **is not encrypted**.
+- The setup QR is generated on the PC, not sent to an external QR service. Do not share the QR profile or relay credentials.
+- Repeat phone setup if the PC's LAN address changes.
 
-## Native Windows manager
-
-`BPSR Relay Manager.exe` is a native C# WinForms manager. It directly owns the UI, system tray, single-instance restore, Windows network/firewall setup, relay process lifecycle, local SFA profile server, configuration generation and diagnostics.
-
-The user release does **not** launch or ship PowerShell manager scripts. PowerShell files in the repository are developer/CI tooling only.
-
-The actual gameplay traffic still uses the proven sing-box relay processes. Moving the manager to C# changes desktop lifecycle/reliability and lowers manager overhead; it does not replace the field-tested relay topology.
-
-## Compatibility
-
-The relay is **DPS-meter agnostic**: it forwards game traffic and does not calculate DPS itself. Use any compatible Windows meter that can parse BPSR traffic from **StarSEA**. Multiple compatible meters may observe the same stream.
-
-The manager keeps normal setup on **Home**, troubleshooting on **Details**, and simple instructions on **Help**.
-
-## Important
-
-- Use only on a **trusted home/private LAN**.
-- Do **not** port-forward relay port `10808` on your router.
-- The phone -> PC hop uses **authenticated SOCKS5** but is not encrypted.
-- Do **not** target `BPSRMobileFront` in the DPS meter; use **StarSEA**.
-- Re-run phone setup if your PC LAN IP changes or the manager tells you to repair the profile.
-- The SFA QR is generated locally on the PC; the setup payload is not sent to an external QR service.
-
-The relay does not modify BPSR game files.
-
-**Unofficial community tool.** Not affiliated with BPSR, SFA, sing-box, or any DPS-meter project.
+The native Windows manager handles setup, diagnostics and relay processes; PowerShell files in the repository are developer/CI tooling, not part of the user release. The relay does not modify game files.
 
 ## Troubleshooting
 
-Use **Details** for connection diagnostics and **Help** for the setup sequence. If the phone cannot connect, confirm the PC LAN address, private-network firewall rule and imported SFA profile. If the meter has no data, check that its capture target is **StarSEA**.
+Open **Details** for diagnostics or **Help** for setup guidance. If the phone cannot connect, check the PC address, private-network firewall rule and SFA profile. If the meter is empty, check that its target is **StarSEA**. Include the app version, connection type and meter name when reporting a problem, but never include credentials.
 
-Include the relay version, PC/phone connection type and meter name in a bug report. Do not post the phone setup QR profile or relay credentials.
+Unofficial community tool; not affiliated with BPSR, SFA, sing-box or any DPS-meter project.
