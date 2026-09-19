@@ -1,6 +1,6 @@
 # BPSR Android DPSMeter Relay
 
-Windows helper that forwards **Blue Protocol: Star Resonance combat traffic from an Android phone to a compatible PC DPS meter**. The relay does not calculate DPS itself.
+Windows helper that forwards **Blue Protocol: Star Resonance combat traffic from an Android phone to a compatible PC DPS meter**. The relay is **DPS-meter agnostic**: it forwards traffic and does not calculate DPS itself.
 
 [Download latest release](https://github.com/Zudin987/BPSR-Android-DPSMeter-Relay/releases/latest) · [Project website](https://zudin987.github.io/projects/android-relay/)
 
@@ -10,7 +10,7 @@ Windows helper that forwards **Blue Protocol: Star Resonance combat traffic from
 
 ## Requirements
 
-- Windows PC and Android phone on the **same trusted private network**.
+- Windows PC and Android phone on the **same trusted home/private LAN**.
 - SFA (sing-box for Android) installed on the phone.
 - A separate Windows DPS meter compatible with BPSR traffic from **StarSEA**.
 - Administrator approval to create the Windows firewall rule.
@@ -28,8 +28,8 @@ For daily use: **Start Relay on PC → Start SFA on phone → Open BPSR**. The m
 ## Important network safety
 
 - Use this tool **only on a trusted home/private LAN**. Never port-forward port `10808`.
-- The phone-to-PC hop uses authenticated SOCKS5 but **is not encrypted**.
-- The setup QR is generated on the PC, not sent to an external QR service. Do not share the QR profile or relay credentials.
+- The phone-to-PC hop uses **authenticated SOCKS5** but **is not encrypted**.
+- The setup QR is **generated locally** on the PC, not sent to an external QR service. Do not share the QR profile or relay credentials.
 - Repeat phone setup if the PC's LAN address changes.
 
 The native Windows manager handles setup, diagnostics and relay processes; PowerShell files in the repository are developer/CI tooling, not part of the user release. The relay does not modify game files.
