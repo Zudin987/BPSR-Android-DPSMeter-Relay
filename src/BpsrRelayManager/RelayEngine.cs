@@ -101,6 +101,9 @@ namespace BpsrRelayManager
         private DateTime _lastListenerCheck = DateTime.MinValue;
         private bool _lastListenerHealthy;
         private string _listenerDetail = "not running";
+        private DateTime _runtimeCacheWriteUtc = DateTime.MinValue;
+        private long _runtimeCacheLength = -1;
+        private bool _runtimeCacheReady;
 
         public RelayEngine(string root, Action<string> logger)
         {
@@ -294,13 +297,29 @@ namespace BpsrRelayManager
 
         public bool RuntimeReady()
         {
-            if (!File.Exists(_singBoxExe) || !File.Exists(_runtimeHashFile)) return false;
+            if (!File.Exists(_singBoxExe) || !File.Exists(_runtimeHashFile))
+            {
+                _runtimeCacheReady = false;
+                _runtimeCacheWriteUtc = DateTime.MinValue;
+                _runtimeCacheLength = -1;
+                return false;
+            }
             try
             {
+                FileInfo info = new FileInfo(_singBoxExe);
+                if (_runtimeCacheWriteUtc == info.LastWriteTimeUtc && _runtimeCacheLength == info.Length) return _runtimeCacheReady;
                 string expected = File.ReadAllText(_runtimeHashFile).Trim().ToLowerInvariant();
-                return expected.Length == 64 && string.Equals(expected, Sha256File(_singBoxExe), StringComparison.OrdinalIgnoreCase);
+                bool ready = expected.Length == 64 && string.Equals(expected, Sha256File(_singBoxExe), StringComparison.OrdinalIgnoreCase);
+                _runtimeCacheWriteUtc = info.LastWriteTimeUtc;
+                _runtimeCacheLength = info.Length;
+                _runtimeCacheReady = ready;
+                return ready;
             }
-            catch { return false; }
+            catch
+            {
+                _runtimeCacheReady = false;
+                return false;
+            }
         }
 
         public string InstalledRuntimeVersion()
@@ -320,7 +339,7 @@ namespace BpsrRelayManager
             RelayCredentials credentials = GetOrCreateCredentials();
             File.Copy(_singBoxExe, _frontExe, true);
             File.Copy(_singBoxExe, _starExe, true);
-            if (Sha256File(_singBoxExe) != Sha256File(_frontExe) || Sha256File(_singBoxExe) != Sha256File(_starExe)) throw new InvalidOperationException("Relay runtime copy verification failed.");
+            VerifyRuntimeCopies();
             RemoveLegacyFiles();
             WriteRelayConfigs(ip, credentials);
             ValidateGeneratedConfigs(ip);
@@ -365,6 +384,8 @@ namespace BpsrRelayManager
                 File.Copy(found, _singBoxExe, true);
                 WriteTextAtomic(_versionFile, version);
                 WriteTextAtomic(_runtimeHashFile, Sha256File(_singBoxExe));
+                _runtimeCacheWriteUtc = DateTime.MinValue;
+                _runtimeCacheLength = -1;
                 Log("Installed tested sing-box " + version + ".");
             }
             finally { try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch { } }
@@ -520,12 +541,22 @@ namespace BpsrRelayManager
             if (!CanBindTcp(ip, FrontPort) || !CanBindUdp(ip, FrontPort)) throw new InvalidOperationException("Relay port " + FrontPort + " is already in use. Stop the conflicting program first.");
         }
 
+        private void VerifyRuntimeCopies()
+        {
+            if (!RuntimeReady()) throw new InvalidOperationException("The verified sing-box runtime is not ready.");
+            string expected = Sha256File(_singBoxExe);
+            if (!File.Exists(_frontExe) || !string.Equals(Sha256File(_frontExe), expected, StringComparison.OrdinalIgnoreCase)) File.Copy(_singBoxExe, _frontExe, true);
+            if (!File.Exists(_starExe) || !string.Equals(Sha256File(_starExe), expected, StringComparison.OrdinalIgnoreCase)) File.Copy(_singBoxExe, _starExe, true);
+            if (!string.Equals(Sha256File(_frontExe), expected, StringComparison.OrdinalIgnoreCase) || !string.Equals(Sha256File(_starExe), expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Relay runtime copy verification failed.");
+        }
+
         public void StartRelay(string ip)
         {
             RequireSelectedIp(ip);
             if (IsRelayRunning()) { Log("Relay is already running."); return; }
             StopRelay();
             if (!RuntimeReady() || GetProfilePcIp() != ip) throw new InvalidOperationException("Run Prepare Relay first.");
+            VerifyRuntimeCopies();
             if (!FirewallReady(ip)) throw new InvalidOperationException("The Windows Private-LAN firewall rule is not ready.");
             if (GetForeignRelayProcesses().Count > 0) throw new InvalidOperationException("Foreign or duplicate relay process detected.");
             AssertFrontPortFree(ip);
@@ -604,10 +635,18 @@ namespace BpsrRelayManager
         {
             if (_tracked == null) LoadTrackedState();
             if (_tracked == null) return false;
-            if (!ExpectedProcess(_tracked.starPid, _starExe, _tracked.starStartUtc) || !ExpectedProcess(_tracked.frontPid, _frontExe, _tracked.frontStartUtc))
+            bool starOk = ExpectedProcess(_tracked.starPid, _starExe, _tracked.starStartUtc);
+            bool frontOk = ExpectedProcess(_tracked.frontPid, _frontExe, _tracked.frontStartUtc);
+            if (!starOk || !frontOk)
             {
+                PidState failed = _tracked;
                 _lastListenerHealthy = false;
                 _listenerDetail = "tracked relay process exited or changed";
+                StopExpected(failed.frontPid, _frontExe, failed.frontStartUtc, "BPSRMobileFront");
+                StopExpected(failed.starPid, _starExe, failed.starStartUtc, "StarSEA");
+                try { if (File.Exists(_pidFile)) File.Delete(_pidFile); } catch { }
+                _tracked = null;
+                Log("Relay fault detected; cleaned up the remaining owned relay process. Start Relay again when ready.");
                 return false;
             }
             if ((DateTime.UtcNow - _lastListenerCheck).TotalSeconds < 10) return _lastListenerHealthy;
@@ -749,6 +788,7 @@ namespace BpsrRelayManager
             AddCheck(checks, "LAN IP", IsLocalIp(ip), ip, "Selected IP is not assigned to this PC.");
             AddCheck(checks, "Runtime", RuntimeReady(), InstalledRuntimeVersion() + " verified", "Run Prepare Relay first.");
             AddCheck(checks, "Android profile", GetProfilePcIp() == ip, "Current profile matches " + ip, "Run Prepare Relay to refresh the profile.");
+            AddCheck(checks, "Phone setup", PhoneProfileConfirmed(), "Current SFA profile confirmed on the phone.", PhoneProfileDownloaded() ? "Profile downloaded; confirm it is imported in SFA and BPSR-only per-app routing is selected." : "Import the current profile in SFA and confirm phone setup first.");
             AddCheck(checks, "Duplicate relay processes", GetForeignRelayProcesses().Count == 0, "No extra relay process detected.", "Old/duplicate relay process found.");
             AddCheck(checks, "Firewall", FirewallReady(ip), "Private-LAN TCP+UDP rules ready.", "Click Allow Firewall.");
             if (!IsRelayRunning()) AddCheck(checks, "Relay port", CanBindTcp(ip, FrontPort) && CanBindUdp(ip, FrontPort), "TCP+UDP " + FrontPort + " free.", "Port " + FrontPort + " is already in use.");
@@ -763,7 +803,7 @@ namespace BpsrRelayManager
         public string GetDiagnostics(string ip)
         {
             string category = GetNetworkCategory(ip);
-            return "BPSR Android DPSMeter Relay Diagnostics\r\nManager: " + VersionInfo.Version + " (native C# WinForms)\r\nTested sing-box: " + VersionInfo.TestedSingBoxVersion + "\r\nInstalled sing-box: " + InstalledRuntimeVersion() + "\r\nRuntime integrity: " + (RuntimeReady() ? "OK" : "FAIL/UNKNOWN") + "\r\n\r\nSelected PC IP: " + ip + "\r\nSelected adapter: " + GetAdapterName(ip) + "\r\nWindows network category: " + category + "\r\nProfile IP: " + GetProfilePcIp() + "\r\nFirewall: " + (FirewallReady(ip) ? "OK - Private LAN TCP+UDP" : "not ready") + "\r\n\r\nRelay running: " + IsRelayRunning() + "\r\nRelay listener health: " + _listenerDetail + "\r\nTopology: Android -> BPSRMobileFront -> localhost StarSEA -> game server\r\nIngress transport: authenticated SOCKS5 on trusted Private LAN\r\nAndroid protocol sniffing: DISABLED\r\nMultiplexing: DISABLED\r\n\r\nUniversal DPS meter target: StarSEA\r\nDo NOT target: BPSRMobileFront\r\n\r\nNo relay passwords or profile secrets are included in this diagnostic.";
+            return "BPSR Android DPSMeter Relay Diagnostics\r\nManager: " + VersionInfo.Version + " (native C# WinForms)\r\nTested sing-box: " + VersionInfo.TestedSingBoxVersion + "\r\nInstalled sing-box: " + InstalledRuntimeVersion() + "\r\nRuntime integrity: " + (RuntimeReady() ? "OK" : "FAIL/UNKNOWN") + "\r\n\r\nSelected PC IP: " + ip + "\r\nSelected adapter: " + GetAdapterName(ip) + "\r\nWindows network category: " + category + "\r\nProfile IP: " + GetProfilePcIp() + "\r\nPhone setup confirmed: " + PhoneProfileConfirmed() + "\r\nFirewall: " + (FirewallReady(ip) ? "OK - Private LAN TCP+UDP" : "not ready") + "\r\n\r\nRelay running: " + IsRelayRunning() + "\r\nRelay listener health: " + _listenerDetail + "\r\nTopology: Android -> BPSRMobileFront -> localhost StarSEA -> game server\r\nIngress transport: authenticated SOCKS5 on trusted Private LAN\r\nAndroid protocol sniffing: DISABLED\r\nMultiplexing: DISABLED\r\n\r\nUniversal DPS meter target: StarSEA\r\nDo NOT target: BPSRMobileFront\r\n\r\nNo relay passwords or profile secrets are included in this diagnostic.";
         }
 
         public void RestorePreviousRuntime()
@@ -778,8 +818,11 @@ namespace BpsrRelayManager
             File.Copy(exe, _singBoxExe, true);
             File.Copy(version, _versionFile, true);
             File.Copy(hash, _runtimeHashFile, true);
+            _runtimeCacheWriteUtc = DateTime.MinValue;
+            _runtimeCacheLength = -1;
             File.Copy(_singBoxExe, _frontExe, true);
             File.Copy(_singBoxExe, _starExe, true);
+            VerifyRuntimeCopies();
             if (!RuntimeReady()) throw new InvalidOperationException("Restored runtime failed verification.");
             Log("Runtime rollback successful. Active sing-box: " + InstalledRuntimeVersion() + ".");
         }
@@ -805,6 +848,7 @@ namespace BpsrRelayManager
             RelayCredentials credentials = GetOrCreateCredentials();
             File.Copy(_singBoxExe, _frontExe, true);
             File.Copy(_singBoxExe, _starExe, true);
+            VerifyRuntimeCopies();
             WriteRelayConfigs("192.0.2.10", credentials);
             ValidateGeneratedConfigs("192.0.2.10");
             string android = File.ReadAllText(_androidConfig);
