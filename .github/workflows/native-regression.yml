@@ -13,23 +13,30 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Parse PowerShell regression test
+      - name: Parse native PowerShell regression tests
         shell: powershell
         run: |
-          $tokens = $null; $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:GITHUB_WORKSPACE 'scripts\TestNativeProfileServer.ps1'), [ref]$tokens, [ref]$errors)
-          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          foreach ($relative in @('scripts\TestNativeProfileServer.ps1', 'scripts\TestNativeReadiness.ps1', 'scripts\TestSocksUdp.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:GITHUB_WORKSPACE $relative), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error ($relative + ': ' + $_.Message) }; exit 1 }
+          }
       - name: Build native relay manager
         shell: powershell
         run: |
           & '.\scripts\BuildNativeManager.ps1' -OutputPath '.build\native\BPSR Relay Manager.exe'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Exercise actual native profile setup server
+      - name: Verify native profile delivery and repeat imports
         shell: powershell
         run: |
           & '.\scripts\TestNativeProfileServer.ps1' -ManagerExe '.build\native\BPSR Relay Manager.exe'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify native two-stage relay smoke test
+      - name: Verify phone readiness state transitions
+        shell: powershell
+        run: |
+          & '.\scripts\TestNativeReadiness.ps1' -ManagerExe '.build\native\BPSR Relay Manager.exe'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify two-stage TCP and authenticated UDP relay
         shell: powershell
         run: |
           $root = Join-Path $env:GITHUB_WORKSPACE '.native-regression'
