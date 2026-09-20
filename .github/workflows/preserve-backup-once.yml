@@ -1,0 +1,27 @@
+name: Preserve failed state-file recovery backup once
+on:
+  push:
+    branches: [fix/final-reliability-audit-v114]
+    paths: ['.github/workflows/preserve-backup-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep backup if recovery itself fails
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/BpsrRelayManager/RelayEngine.cs')
+          s=p.read_text(encoding='utf-8-sig')
+          old='finally { try { if (File.Exists(backup)) File.Delete(backup); } catch { } }'
+          new='finally { try { if (File.Exists(backup) && File.Exists(path)) File.Delete(backup); } catch { } }'
+          assert s.count(old)==1, 'Expected backup-retention anchor'
+          p.write_text(s.replace(old,new),encoding='utf-8',newline='')
+          PY
+          git diff --check
+          git add src/BpsrRelayManager/RelayEngine.cs
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: retain backup when state-file restoration fails'
+          git push origin HEAD:fix/final-reliability-audit-v114
