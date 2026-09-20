@@ -20,7 +20,7 @@ public static class NativeReadinessHarness
     {
         var info = type.GetMethod(method, Flags);
         if (info == null) throw new InvalidOperationException("Missing native method " + method);
-        info.Invoke(engine, new object[] { argument });
+        info.Invoke(engine, info.GetParameters().Length == 0 ? null : new object[] { argument });
     }
     public static bool Confirmed(Type type, object engine)
     {

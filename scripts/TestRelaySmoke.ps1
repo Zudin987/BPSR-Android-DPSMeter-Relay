@@ -135,6 +135,12 @@ try {
     Assert-RelayTcpListener -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
     Assert-RelayTcpListener -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
 
+    $udpScript = Join-Path $scriptDir 'TestSocksUdp.ps1'
+    if (-not (Test-Path -LiteralPath $udpScript -PathType Leaf)) { throw 'Authenticated SOCKS5 UDP test missing.' }
+    & $udpScript -FrontPort $frontPort -Username $frontUsername -Password $frontPassword
+    $frontProcess.Refresh()
+    $backProcess.Refresh()
+    Write-Host ('LOCAL SYNTHETIC RESOURCE SNAPSHOT: front/back working set MB ' + [Math]::Round($frontProcess.WorkingSet64 / 1MB, 1) + '/' + [Math]::Round($backProcess.WorkingSet64 / 1MB, 1) + '; handles ' + $frontProcess.HandleCount + '/' + $backProcess.HandleCount + '. Not real gameplay benchmarking.')
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
     $result = & $curl.Source --fail --silent --show-error --max-time 10 --proxy-user ($frontUsername + ':' + $frontPassword) --socks5-hostname ('127.0.0.1:' + $frontPort) $url

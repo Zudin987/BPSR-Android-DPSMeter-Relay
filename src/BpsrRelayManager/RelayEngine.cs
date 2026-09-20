@@ -292,7 +292,8 @@ namespace BpsrRelayManager
         public void MarkPhoneProfileDownloaded()
         {
             string id = GetCurrentProfileId();
-            if (string.IsNullOrWhiteSpace(id)) return;
+            // A second SFA/browser download cannot revoke explicit confirmation for this profile.
+            if (string.IsNullOrWhiteSpace(id) || PhoneProfileConfirmed()) return;
             WriteJson(_phoneState, new PhoneProfileState { profileId = id, confirmedUtc = DateTime.UtcNow.ToString("o"), reason = "profile-downloaded" });
         }
 
@@ -541,7 +542,6 @@ namespace BpsrRelayManager
             if (!RuntimeReady() || GetProfilePcIp() != ip) throw new InvalidOperationException("Run Prepare Relay first.");
             if (!FirewallReady(ip)) throw new InvalidOperationException("The Windows Private-LAN firewall rule is not ready.");
             if (GetForeignRelayProcesses().Count > 0) throw new InvalidOperationException("Foreign or duplicate relay process detected.");
-            AssertFrontPortFree(ip);
             AssertFrontPortFree(ip);
             // Verify the executable copies that will actually be launched, not only the master.
             if (!File.Exists(_frontExe) || !File.Exists(_starExe) ||
