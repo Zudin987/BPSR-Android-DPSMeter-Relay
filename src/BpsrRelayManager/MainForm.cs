@@ -209,7 +209,14 @@ namespace BpsrRelayManager
             _trayStop = new ToolStripMenuItem("Stop Relay"); _trayStop.Click += delegate { StopRelayGuided(); }; menu.Items.Add(_trayStop);
             menu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem exit = new ToolStripMenuItem("Exit Manager"); exit.Click += delegate { _forceExit = true; Close(); }; menu.Items.Add(exit);
-            ToolStripMenuItem stopExit = new ToolStripMenuItem("Stop Relay && Exit"); stopExit.Click += delegate { try { _engine.StopRelay(); } catch { } _forceExit = true; Close(); }; menu.Items.Add(stopExit);
+            ToolStripMenuItem stopExit = new ToolStripMenuItem("Stop Relay && Exit"); stopExit.Click += delegate
+            {
+                if (_busy) return;
+                try { _engine.StopRelay(); }
+                catch (Exception ex) { ShowFriendlyError("Could not stop relay; manager will remain open", ex); return; }
+                _forceExit = true;
+                Close();
+            }; menu.Items.Add(stopExit);
             _notifyIcon.ContextMenuStrip = menu;
             _notifyIcon.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) RestoreFromTray(); };
             _notifyIcon.DoubleClick += delegate { RestoreFromTray(); };
@@ -468,13 +475,23 @@ namespace BpsrRelayManager
             bool running = _engine.IsRelayRunning();
             if (running)
             {
-                SetStatus(_relayState, "Running", _success); SetStatus(_runtimeState, "Ready", _success); SetStatus(_profileState, _engine.PhoneProfileConfirmed() ? "Saved (phone not probed)" : "Not confirmed", _engine.PhoneProfileConfirmed() ? _success : _warning); SetStatus(_firewallState, "Ready", _success); _nextAction.Text = "Relay is running. Start SFA on your phone if needed, then open BPSR and play."; SetButtonStates(true, true, true, true, false); SetOverallState("RELAY RUNNING", _success, _successSoft); SetRecommendedAction(null); UpdateTray(true); return;
+                bool degraded = _engine.ListenerDetail.IndexOf("degraded", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool profileReady = _engine.ProfileReady(selectedIp);
+                bool firewallReady = _engine.FirewallReady(selectedIp);
+                SetStatus(_relayState, degraded ? "Degraded" : "Running", degraded ? _warning : _success);
+                SetStatus(_runtimeState, _engine.RuntimeReady() ? "Ready" : "Needs repair", _engine.RuntimeReady() ? _success : _danger);
+                SetStatus(_profileState, !profileReady ? "Needs repair" : (_engine.PhoneProfileConfirmed() ? "Saved (phone not probed)" : "Not confirmed"), profileReady && _engine.PhoneProfileConfirmed() ? _success : _warning);
+                SetStatus(_firewallState, firewallReady ? "Ready" : "Not ready", firewallReady ? _success : _danger);
+                _nextAction.Text = degraded ? "Relay processes are alive but listener health is degraded. Open Details to diagnose; avoid interrupting a live game unnecessarily." : "Relay processes are running. Start SFA on your phone if needed, then open BPSR and play.";
+                SetButtonStates(true, true, true, true, false);
+                SetOverallState(degraded ? "RELAY DEGRADED" : "RELAY RUNNING", degraded ? _warning : _success, degraded ? _warningSoft : _successSoft);
+                SetRecommendedAction(null); UpdateTray(true); return;
             }
             string ip = selectedIp;
             List<RelayProcessInfo> foreign = _engine.GetForeignRelayProcesses(); bool hasForeign = foreign.Count > 0;
             SetStatus(_relayState, hasForeign ? (foreign.Count == 1 ? "Old relay found" : foreign.Count + " old relays") : "Stopped", hasForeign ? _danger : _neutral);
             bool runtime = _engine.RuntimeReady(); SetStatus(_runtimeState, runtime ? "Ready" : "Needs setup", runtime ? _success : _warning);
-            bool profile = !string.IsNullOrWhiteSpace(ip) && _engine.GetProfilePcIp() == ip && _engine.IsLocalIp(ip); bool confirmed = profile && _engine.PhoneProfileConfirmed(); bool downloaded = profile && _engine.PhoneProfileDownloaded();
+            bool profile = !string.IsNullOrWhiteSpace(ip) && _engine.IsLocalIp(ip) && _engine.ProfileReady(ip); bool confirmed = profile && _engine.PhoneProfileConfirmed(); bool downloaded = profile && _engine.PhoneProfileDownloaded();
             SetStatus(_profileState, !profile ? (string.IsNullOrWhiteSpace(_engine.GetProfilePcIp()) ? "Missing" : "Needs update") : (confirmed ? "Ready" : (downloaded ? "Downloaded - confirm" : "Import needed")), !profile ? _warning : (confirmed ? _success : _warning));
             bool firewall = profile && _engine.FirewallReady(ip); string category = profile ? _engine.GetNetworkCategory(ip) : "Unknown"; SetStatus(_firewallState, firewall ? "Ready" : (category == "Public" ? "Network is Public" : "Not set"), firewall ? _success : (category == "Public" ? _danger : _warning));
             if (hasForeign) _nextAction.Text = "Found an old/duplicate relay. Click Prepare Relay to clean it safely.";
@@ -588,7 +605,9 @@ namespace BpsrRelayManager
         {
             if (_log == null || _log.IsDisposed) return;
             if (_log.InvokeRequired) { try { _log.BeginInvoke((MethodInvoker)delegate { AppendLog(line); }); } catch { } return; }
-            _log.AppendText(line + Environment.NewLine); _log.SelectionStart = _log.TextLength; _log.ScrollToCaret();
+            _log.AppendText(line + Environment.NewLine);
+            if (_log.TextLength > 65536) _log.Text = _log.Text.Substring(_log.TextLength - 49152);
+            _log.SelectionStart = _log.TextLength; _log.ScrollToCaret();
         }
 
         public void RunUiSelfTest()

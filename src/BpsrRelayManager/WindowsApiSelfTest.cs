@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
@@ -39,6 +40,7 @@ namespace BpsrRelayManager
 
             TestNativeProfileServer();
             TestPhoneProfileConfirmation();
+            TestProfileReadinessAndCredentialRotation();
         }
 
         private static void TestPhoneProfileConfirmation()
@@ -66,6 +68,52 @@ namespace BpsrRelayManager
             {
                 try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
             }
+        }
+
+        private static string ProfileHash(string path)
+        {
+            using (SHA256 sha = SHA256.Create())
+            using (FileStream file = File.OpenRead(path))
+                return BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static void TestProfileReadinessAndCredentialRotation()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "bpsr-profile-readiness-test-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                RelayEngine engine = new RelayEngine(root, null);
+                string metaPath = Path.Combine(root, "output", "profile-meta.json");
+                string profilePath = Path.Combine(root, "output", "android-bpsr-relay.json");
+                string credentialsPath = Path.Combine(root, ".runtime", "relay-credentials.json");
+                const string ip = "192.0.2.10";
+                const string originalPassword = "11111111111111111111111111111111";
+                const string changedPassword = "22222222222222222222222222222222";
+                string profile = "{\"outbounds\":[{\"type\":\"socks\",\"server\":\"192.0.2.10\",\"server_port\":10808,\"username\":\"bpsr\",\"password\":\"" + originalPassword + "\"}]}";
+                string credentials = "{\"mode\":\"v4-compatible-socks5\",\"frontUsername\":\"bpsr\",\"frontPassword\":\"" + originalPassword + "\",\"internalUsername\":\"internal\",\"internalPassword\":\"33333333333333333333333333333333\"}";
+                File.WriteAllText(profilePath, profile, new UTF8Encoding(false));
+                File.WriteAllText(credentialsPath, credentials, new UTF8Encoding(false));
+                string identity = ProfileHash(profilePath);
+                File.WriteAllText(metaPath, "{\"pcIp\":\"" + ip + "\",\"profileId\":\"" + identity + "\"}", new UTF8Encoding(false));
+                if (!engine.ProfileReady(ip)) throw new InvalidOperationException("Matching generated profile was rejected.");
+                if (engine.ProfileReady("192.0.2.11")) throw new InvalidOperationException("Wrong IP accepted.");
+                File.Delete(profilePath);
+                if (engine.ProfileReady(ip)) throw new InvalidOperationException("Missing Android file accepted as ready.");
+                File.WriteAllText(profilePath, profile.Replace(originalPassword, changedPassword), new UTF8Encoding(false));
+                if (engine.ProfileReady(ip)) throw new InvalidOperationException("Tampered Android profile hash was accepted.");
+                File.WriteAllText(metaPath, "{\"pcIp\":\"" + ip + "\",\"profileId\":\"" + ProfileHash(profilePath) + "\"}", new UTF8Encoding(false));
+                if (engine.ProfileReady(ip)) throw new InvalidOperationException("Stale PC credentials were accepted despite matching profile hash.");
+                File.WriteAllText(profilePath, profile, new UTF8Encoding(false));
+                File.WriteAllText(metaPath, "{\"pcIp\":\"" + ip + "\",\"profileId\":\"" + ProfileHash(profilePath) + "\"}", new UTF8Encoding(false));
+                if (!engine.ProfileReady(ip)) throw new InvalidOperationException("Restored valid profile was rejected.");
+                File.Delete(credentialsPath);
+                if (engine.ProfileReady(ip)) throw new InvalidOperationException("Missing relay credentials were accepted.");
+                File.WriteAllText(credentialsPath, credentials, new UTF8Encoding(false));
+                File.WriteAllText(metaPath, "{\"pcIp\":\"" + ip + "\",\"profileId\":\"\"}", new UTF8Encoding(false));
+                if (engine.PhoneProfileConfirmed() || engine.ProfileReady(ip)) throw new InvalidOperationException("Legacy missing profile identity was incorrectly accepted.");
+                Console.WriteLine("NATIVE PROFILE READINESS PASS: matching profile, missing/tampered JSON, stale/missing credentials, wrong IP and legacy state.");
+            }
+            finally { try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { } }
         }
 
         private static string HttpGet(string url, string method)

@@ -187,7 +187,24 @@ namespace BpsrRelayManager
                 if (File.Exists(path))
                 {
                     try { File.Replace(temp, path, null); }
-                    catch { File.Delete(path); File.Move(temp, path); }
+                    catch
+                    {
+                        // File.Replace may be unsupported on some filesystems. Keep a recoverable
+                        // original until the replacement has actually reached its destination.
+                        string backup = path + ".backup-" + Guid.NewGuid().ToString("N");
+                        File.Copy(path, backup, false);
+                        try
+                        {
+                            File.Delete(path);
+                            File.Move(temp, path);
+                        }
+                        catch
+                        {
+                            if (!File.Exists(path)) File.Copy(backup, path, false);
+                            throw;
+                        }
+                        finally { try { if (File.Exists(backup) && File.Exists(path)) File.Delete(backup); } catch { } }
+                    }
                 }
                 else File.Move(temp, path);
             }
@@ -272,8 +289,8 @@ namespace BpsrRelayManager
             {
                 return state.reason == "confirmed" || state.reason == "user-confirmed-manual-import" || state.reason == "preserved-unchanged-profile";
             }
-            ProfileMeta meta = ReadJson<ProfileMeta>(_profileMeta);
-            return meta != null && string.IsNullOrWhiteSpace(meta.profileId) && File.Exists(_androidConfig);
+            // Legacy metadata without an explicit identity must not imply phone import.
+            return false;
         }
 
         public bool PhoneProfileDownloaded()
@@ -295,6 +312,40 @@ namespace BpsrRelayManager
             string id = GetCurrentProfileId();
             if (string.IsNullOrWhiteSpace(id) || PhoneProfileConfirmed()) return;
             WriteJson(_phoneState, new PhoneProfileState { profileId = id, confirmedUtc = DateTime.UtcNow.ToString("o"), reason = "profile-downloaded" });
+        }
+
+        private static bool ValidCredentials(RelayCredentials credentials)
+        {
+            return credentials != null && credentials.mode == "v4-compatible-socks5" &&
+                credentials.frontUsername == "bpsr" && IsHex32(credentials.frontPassword) &&
+                credentials.internalUsername == "internal" && IsHex32(credentials.internalPassword);
+        }
+
+        public bool ProfileReady(string ip)
+        {
+            try
+            {
+                ProfileMeta meta = ReadJson<ProfileMeta>(_profileMeta);
+                RelayCredentials creds = ReadJson<RelayCredentials>(_credentialsFile);
+                if (meta == null || string.IsNullOrWhiteSpace(meta.profileId) || meta.pcIp != ip ||
+                    !File.Exists(_androidConfig) || !ValidCredentials(creds)) return false;
+                if (!string.Equals(meta.profileId, Sha256File(_androidConfig), StringComparison.OrdinalIgnoreCase)) return false;
+                string profile = File.ReadAllText(_androidConfig, Encoding.UTF8);
+                // Parse values, rather than scanning JSON text, to avoid accepting stale or
+                // unrelated credentials present in another field.
+                Dictionary<string, object> config = _json.Deserialize<Dictionary<string, object>>(profile);
+                if (config == null || !config.ContainsKey("outbounds")) return false;
+                System.Collections.IList outbounds = config["outbounds"] as System.Collections.IList;
+                if (outbounds == null || outbounds.Count != 1) return false;
+                Dictionary<string, object> outbound = outbounds[0] as Dictionary<string, object>;
+                if (outbound == null) return false;
+                return Convert.ToString(outbound["type"]) == "socks" &&
+                    Convert.ToString(outbound["server"]) == ip &&
+                    Convert.ToInt32(outbound["server_port"]) == FrontPort &&
+                    Convert.ToString(outbound["username"]) == creds.frontUsername &&
+                    Convert.ToString(outbound["password"]) == creds.frontPassword;
+            }
+            catch { return false; }
         }
 
         public bool RuntimeReady(bool forceVerification = false)
@@ -412,7 +463,7 @@ namespace BpsrRelayManager
         private RelayCredentials GetOrCreateCredentials()
         {
             RelayCredentials existing = ReadJson<RelayCredentials>(_credentialsFile);
-            if (existing != null && existing.mode == "v4-compatible-socks5" && existing.frontUsername == "bpsr" && IsHex32(existing.frontPassword) && existing.internalUsername == "internal" && IsHex32(existing.internalPassword)) return existing;
+            if (ValidCredentials(existing)) return existing;
             RelayCredentials created = new RelayCredentials();
             created.mode = "v4-compatible-socks5";
             created.frontUsername = "bpsr";
@@ -576,12 +627,13 @@ namespace BpsrRelayManager
             RequireSelectedIp(ip);
             if (IsRelayRunning()) { Log("Relay is already running."); return; }
             StopRelay();
-            if (!RuntimeReady() || GetProfilePcIp() != ip) throw new InvalidOperationException("Run Prepare Relay first.");
+            if (!RuntimeReady() || !ProfileReady(ip)) throw new InvalidOperationException("PC setup, Android profile or relay credentials are missing or mismatched. Run Prepare Relay, reimport the generated profile in SFA if it changed, and confirm phone setup again.");
             VerifyRuntimeCopies();
             if (!FirewallReady(ip)) throw new InvalidOperationException("The Windows Private-LAN firewall rule is not ready.");
             if (GetForeignRelayProcesses().Count > 0) throw new InvalidOperationException("Foreign or duplicate relay process detected.");
             AssertFrontPortFree(ip);
-            RelayCredentials creds = GetOrCreateCredentials();
+            RelayCredentials creds = ReadJson<RelayCredentials>(_credentialsFile);
+            if (!ValidCredentials(creds)) throw new InvalidOperationException("Relay credentials are missing or invalid. Run Prepare Relay and reimport the profile in SFA.");
             int internalPort = FindFreeInternalPort();
             WritePcConfigs(ip, creds, internalPort);
             ValidateGeneratedConfigs(ip);
@@ -812,7 +864,7 @@ namespace BpsrRelayManager
         public ProfileServer CreateProfileServer(string ip)
         {
             RequireSelectedIp(ip);
-            if (!File.Exists(_androidConfig) || GetProfilePcIp() != ip) throw new InvalidOperationException("Run Prepare Relay first.");
+            if (!ProfileReady(ip)) throw new InvalidOperationException("Android profile or credentials are missing or mismatched. Run Prepare Relay first.");
             if (IsRelayRunning()) throw new InvalidOperationException("Stop the relay before starting Phone Setup.");
             if (!FirewallReady(ip)) throw new InvalidOperationException("Click Allow Firewall before Phone Setup.");
             if (GetForeignRelayProcesses().Count > 0) throw new InvalidOperationException("Close old relay processes before Phone Setup.");
@@ -843,7 +895,7 @@ namespace BpsrRelayManager
             List<CheckResult> checks = new List<CheckResult>();
             AddCheck(checks, "LAN IP", IsLocalIp(ip), ip, "Selected IP is not assigned to this PC.");
             AddCheck(checks, "Runtime", RuntimeReady(), InstalledRuntimeVersion() + " verified", "Run Prepare Relay first.");
-            AddCheck(checks, "Android profile", GetProfilePcIp() == ip, "Current profile matches " + ip, "Run Prepare Relay to refresh the profile.");
+            AddCheck(checks, "Android profile", ProfileReady(ip), "Profile file, identity and credentials match " + ip, "Profile file, identity or credentials are missing/mismatched. Run Prepare Relay and reimport in SFA if changed.");
             AddCheck(checks, "Phone setup", PhoneProfileConfirmed(), "Current SFA profile confirmed on the phone.", PhoneProfileDownloaded() ? "Profile downloaded; confirm it is imported in SFA and BPSR-only per-app routing is selected." : "Import the current profile in SFA and confirm phone setup first.");
             AddCheck(checks, "Duplicate relay processes", GetForeignRelayProcesses().Count == 0, "No extra relay process detected.", "Old/duplicate relay process found.");
             AddCheck(checks, "Firewall", FirewallReady(ip), "Private-LAN TCP+UDP rules ready.", "Click Allow Firewall.");
