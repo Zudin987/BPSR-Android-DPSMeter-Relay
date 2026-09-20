@@ -137,7 +137,14 @@ try {
 
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
-    $result = & $curl.Source --fail --silent --show-error --max-time 10 --proxy-user ($frontUsername + ':' + $frontPassword) --socks5-hostname ('127.0.0.1:' + $frontPort) $url
+    # A nonmatching explicit --noproxy overrides NO_PROXY/no_proxy from the runner;
+    # do not use an empty argument here (Windows PowerShell 5.1 may drop it).
+    $proxy = '127.0.0.1:' + $frontPort
+    $bad = & $curl.Source --noproxy 'no-proxy.invalid' --fail --silent --max-time 5 --proxy-user ($frontUsername + ':incorrect-password') --socks5-hostname $proxy $url 2>$null
+    if ($LASTEXITCODE -eq 0) { throw 'Invalid SOCKS credentials unexpectedly succeeded: curl may have bypassed the proxy.' }
+    if (Test-Path -LiteralPath $profileMarker) { throw 'Invalid SOCKS credentials unexpectedly fetched the phone profile.' }
+
+    $result = & $curl.Source --noproxy 'no-proxy.invalid' --fail --silent --show-error --max-time 10 --proxy-user ($frontUsername + ':' + $frontPassword) --socks5-hostname $proxy $url
     if ($LASTEXITCODE -ne 0) { throw ('curl v4-compatible relay request failed with exit code ' + $LASTEXITCODE + '.') }
     $body = ($result | Out-String)
     if ($body -notmatch 'relaySmokeTest' -or $body -notmatch 'ok') {
@@ -155,7 +162,7 @@ try {
         throw 'Phone-profile confirmation marker did not match the downloaded profile.'
     }
 
-    Write-Host 'V4-COMPAT RELAY SMOKE PASS: TCP listener readiness + TCP/UDP port availability; SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target; exact phone profile download confirmed.'
+    Write-Host 'V4-COMPAT TCP RELAY SMOKE PASS: proxy bypass disabled; bad SOCKS credentials rejected; authenticated SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target; exact phone-profile download confirmed. UDP forwarding is not covered by this test.'
 }
 finally {
     foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {
