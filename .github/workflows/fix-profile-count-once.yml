@@ -1,0 +1,27 @@
+name: Repair profile collection count once
+on:
+  push:
+    branches: [fix/final-reliability-audit-v114]
+    paths: ['.github/workflows/fix-profile-count-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Correct collection Count property
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/BpsrRelayManager/RelayEngine.cs')
+          s=p.read_text(encoding='utf-8-sig')
+          old='if (outbounds == null || outbounds.Length != 1) return false;'
+          new='if (outbounds == null || outbounds.Count != 1) return false;'
+          assert s.count(old)==1, 'Unexpected profile array size expression'
+          p.write_text(s.replace(old,new),encoding='utf-8',newline='')
+          PY
+          git diff --check
+          git add src/BpsrRelayManager/RelayEngine.cs
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: use IList Count for serialized profile outbounds'
+          git push origin HEAD:fix/final-reliability-audit-v114
