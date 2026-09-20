@@ -1,0 +1,27 @@
+name: Final audit patch (one time)
+on:
+  push:
+    branches: [fix/final-reliability-audit-v114]
+    paths: ['.github/workflows/final-audit-once.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Apply anchored source fixes and fault-injection tests
+        run: |
+          python3 scripts/apply-final-audit-once.py
+          python3 scripts/add-final-regressions-once.py
+          git diff --check
+          python3 -m py_compile scripts/apply-final-audit-once.py scripts/add-final-regressions-once.py
+      - name: Commit fixes without temporary automation
+        run: |
+          git rm -- scripts/apply-final-audit-once.py scripts/add-final-regressions-once.py .github/workflows/final-audit-once.yml
+          git add -A
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: harden relay error recovery and add corruption regressions'
+          git push origin HEAD:fix/final-reliability-audit-v114
