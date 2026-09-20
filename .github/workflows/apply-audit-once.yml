@@ -39,5 +39,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(native): unify readiness, nonblocking lifecycle and integrity recovery'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git fetch origin fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git rebase origin/fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push origin HEAD:fix/single-pr-relay-reliability-audit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
