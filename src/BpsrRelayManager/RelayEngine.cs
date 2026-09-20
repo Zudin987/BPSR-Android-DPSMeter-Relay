@@ -335,7 +335,7 @@ namespace BpsrRelayManager
                 // unrelated credentials present in another field.
                 Dictionary<string, object> config = _json.Deserialize<Dictionary<string, object>>(profile);
                 if (config == null || !config.ContainsKey("outbounds")) return false;
-                object[] outbounds = config["outbounds"] as object[];
+                System.Collections.IList outbounds = config["outbounds"] as System.Collections.IList;
                 if (outbounds == null || outbounds.Length != 1) return false;
                 Dictionary<string, object> outbound = outbounds[0] as Dictionary<string, object>;
                 if (outbound == null) return false;
