@@ -38,6 +38,34 @@ namespace BpsrRelayManager
             }
 
             TestNativeProfileServer();
+            TestPhoneProfileConfirmation();
+        }
+
+        private static void TestPhoneProfileConfirmation()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "bpsr-phone-confirmation-test-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                RelayEngine engine = new RelayEngine(root, null);
+                string meta = Path.Combine(root, "output", "profile-meta.json");
+                File.WriteAllText(meta, "{\"profileId\":\"profile-one\",\"pcIp\":\"192.0.2.10\"}", new UTF8Encoding(false));
+                if (engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Fresh profile incorrectly confirmed.");
+                engine.MarkPhoneProfileDownloaded();
+                if (engine.PhoneProfileConfirmed() || !engine.PhoneProfileDownloaded())
+                    throw new InvalidOperationException("Downloading must not confirm phone import.");
+                engine.MarkPhoneProfileConfirmed("user-confirmed-manual-import");
+                if (!engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Manual confirmation failed.");
+                engine.MarkPhoneProfileDownloaded();
+                if (!engine.PhoneProfileConfirmed() || engine.PhoneProfileDownloaded())
+                    throw new InvalidOperationException("Repeated download erased explicit confirmation.");
+                File.WriteAllText(meta, "{\"profileId\":\"profile-two\",\"pcIp\":\"192.0.2.10\"}", new UTF8Encoding(false));
+                if (engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Changed profile retained stale confirmation.");
+                Console.WriteLine("NATIVE PHONE CONFIRMATION PASS: downloaded not imported; repeated download preserves confirmation; changed profile invalidates confirmation.");
+            }
+            finally
+            {
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
         }
 
         private static string HttpGet(string url, string method)
