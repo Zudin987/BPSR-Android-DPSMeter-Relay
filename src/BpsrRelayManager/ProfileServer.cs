@@ -113,7 +113,11 @@ namespace BpsrRelayManager
                             else WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found"), headOnly);
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // Do not log the token, URL or profile contents.
+                        if (!_stop && _log != null) _log("Phone setup request failed: " + ex.GetType().Name);
+                    }
                     finally { if (client != null) try { client.Close(); } catch { } }
                 }
             }
