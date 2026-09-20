@@ -293,7 +293,7 @@ namespace BpsrRelayManager
         public void MarkPhoneProfileDownloaded()
         {
             string id = GetCurrentProfileId();
-            if (string.IsNullOrWhiteSpace(id)) return;
+            if (string.IsNullOrWhiteSpace(id) || PhoneProfileConfirmed()) return;
             WriteJson(_phoneState, new PhoneProfileState { profileId = id, confirmedUtc = DateTime.UtcNow.ToString("o"), reason = "profile-downloaded" });
         }
 
