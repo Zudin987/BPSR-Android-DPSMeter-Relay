@@ -1,0 +1,38 @@
+name: Apply Native Audit Once
+
+on:
+  push:
+    branches:
+      - fix/single-pr-relay-reliability-audit
+    paths:
+      - .github/workflows/apply-audit-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Apply deterministic native edits and remove temporary automation
+        shell: powershell
+        run: |
+          $tokens = $null; $errors = $null
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'scripts\ApplyAuditRefactor.ps1'
+          [void][System.Management.Automation.Language.Parser]::ParseFile($patch, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          & $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git add -A
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(native): unify readiness, nonblocking lifecycle and integrity recovery'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
