@@ -138,7 +138,7 @@ namespace BpsrRelayManager
                 if (actual != expected) continue;
                 dynamic network = connection.GetNetwork();
                 int category = (int)network.GetCategory();
-                if (category == 2) return;
+                if (category == 2) throw new InvalidOperationException("The selected network is domain-managed. This relay only installs Private-profile firewall rules; use a trusted home/private network instead.");
                 if (category != 1) network.SetCategory(1);
                 return;
             }
@@ -160,7 +160,7 @@ namespace BpsrRelayManager
         {
             if (string.IsNullOrWhiteSpace(ip) || string.IsNullOrWhiteSpace(adapterId)) return false;
             string category = GetNetworkCategory(adapterId);
-            if (!string.Equals(category, "Private", StringComparison.OrdinalIgnoreCase) && !string.Equals(category, "DomainAuthenticated", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!string.Equals(category, "Private", StringComparison.OrdinalIgnoreCase)) return false;
             try
             {
                 dynamic policy = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FwPolicy2"));
