@@ -64,10 +64,10 @@ namespace BpsrRelayManager
 
         private void ServerLoop()
         {
-            bool served = false;
+            bool downloaded = false;
             try
             {
-                while (!_stop && !served && DateTime.UtcNow < _deadline)
+                while (!_stop && DateTime.UtcNow < _deadline)
                 {
                     TcpClient client = null;
                     try
@@ -96,17 +96,18 @@ namespace BpsrRelayManager
                             string download = basePath + "android-bpsr-relay.json";
                             if (path == basePath)
                             {
-                                string html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>BPSR Relay Setup</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:620px;margin:48px auto;padding:0 20px;line-height:1.5;background:#111;color:#eee}.card{background:#1c1c1c;border:1px solid #333;border-radius:14px;padding:24px}a.button{display:inline-block;margin-top:14px;padding:12px 18px;border-radius:9px;background:#eee;color:#111;text-decoration:none;font-weight:700}.small{color:#aaa;font-size:.92rem}</style></head><body><div class=\"card\"><h2>BPSR Android DPSMeter Relay</h2><p>Your BPSR profile is ready.</p><p><a class=\"button\" href=\"" + WebUtility.HtmlEncode(SfaImportUrl) + "\">Open in SFA</a></p><p><a href=\"android-bpsr-relay.json\" download>Download SFA profile</a></p><p class=\"small\">This local page expires after setup and is not used while gaming.</p></div></body></html>";
+                                string html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>BPSR Relay Setup</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:620px;margin:48px auto;padding:0 20px;line-height:1.5;background:#111;color:#eee}.card{background:#1c1c1c;border:1px solid #333;border-radius:14px;padding:24px}a.button{display:inline-block;margin-top:14px;padding:12px 18px;border-radius:9px;background:#eee;color:#111;text-decoration:none;font-weight:700}.small{color:#aaa;font-size:.92rem}</style></head><body><div class=\"card\"><h2>BPSR Android DPSMeter Relay</h2><p>Your BPSR profile is ready.</p><p><a class=\"button\" href=\"" + WebUtility.HtmlEncode(SfaImportUrl) + "\">Open in SFA</a></p><p><a href=\"android-bpsr-relay.json\" download>Download SFA profile</a></p><p class=\"small\">This local page stays available for up to five minutes so SFA can fetch the profile after you open or download it.</p></div></body></html>";
                                 WriteResponse(stream, 200, "OK", "text/html; charset=utf-8", Encoding.UTF8.GetBytes(html), headOnly);
                             }
                             else if (path == download)
                             {
                                 byte[] body = File.ReadAllBytes(_profilePath);
                                 WriteResponse(stream, 200, "OK", "application/json; charset=utf-8", body, headOnly);
-                                if (!headOnly)
+                                if (!headOnly && !downloaded)
                                 {
-                                    served = true;
+                                    downloaded = true;
                                     try { if (_onDownloaded != null && !string.IsNullOrWhiteSpace(_profileId)) _onDownloaded(); } catch { }
+                                    if (_log != null) _log("Phone profile downloaded; keeping setup link available for SFA import until setup ends.");
                                 }
                             }
                             else WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found"), headOnly);
@@ -120,7 +121,7 @@ namespace BpsrRelayManager
             {
                 try { if (_listener != null) _listener.Stop(); } catch { }
                 _running = false;
-                if (_log != null) _log(served ? "Phone profile downloaded; temporary setup server stopped." : "Phone setup link ended/expired.");
+                if (_log != null) _log(downloaded ? "Phone setup link ended after serving the profile." : "Phone setup link ended/expired.");
             }
         }
 
