@@ -101,6 +101,10 @@ namespace BpsrRelayManager
         private DateTime _lastListenerCheck = DateTime.MinValue;
         private bool _lastListenerHealthy;
         private string _listenerDetail = "not running";
+        private DateTime _runtimeHashCheckedUtc = DateTime.MinValue;
+        private DateTime _runtimeLastWriteUtc = DateTime.MinValue;
+        private long _runtimeSize = -1;
+        private bool _runtimeHealthy;
 
         public RelayEngine(string root, Action<string> logger)
         {
@@ -294,13 +298,22 @@ namespace BpsrRelayManager
 
         public bool RuntimeReady()
         {
-            if (!File.Exists(_singBoxExe) || !File.Exists(_runtimeHashFile)) return false;
             try
             {
+                if (!File.Exists(_singBoxExe) || !File.Exists(_runtimeHashFile)) { _runtimeHealthy = false; return false; }
+                FileInfo info = new FileInfo(_singBoxExe);
+                DateTime now = DateTime.UtcNow;
+                if (_runtimeHealthy && (now - _runtimeHashCheckedUtc).TotalSeconds < 30 &&
+                    _runtimeSize == info.Length && _runtimeLastWriteUtc == info.LastWriteTimeUtc)
+                    return true;
                 string expected = File.ReadAllText(_runtimeHashFile).Trim().ToLowerInvariant();
-                return expected.Length == 64 && string.Equals(expected, Sha256File(_singBoxExe), StringComparison.OrdinalIgnoreCase);
+                _runtimeHealthy = expected.Length == 64 && string.Equals(expected, Sha256File(_singBoxExe), StringComparison.OrdinalIgnoreCase);
+                _runtimeHashCheckedUtc = now;
+                _runtimeSize = info.Length;
+                _runtimeLastWriteUtc = info.LastWriteTimeUtc;
+                return _runtimeHealthy;
             }
-            catch { return false; }
+            catch { _runtimeHealthy = false; return false; }
         }
 
         public string InstalledRuntimeVersion()
@@ -529,6 +542,12 @@ namespace BpsrRelayManager
             if (!FirewallReady(ip)) throw new InvalidOperationException("The Windows Private-LAN firewall rule is not ready.");
             if (GetForeignRelayProcesses().Count > 0) throw new InvalidOperationException("Foreign or duplicate relay process detected.");
             AssertFrontPortFree(ip);
+            AssertFrontPortFree(ip);
+            // Verify the executable copies that will actually be launched, not only the master.
+            if (!File.Exists(_frontExe) || !File.Exists(_starExe) ||
+                !string.Equals(Sha256File(_singBoxExe), Sha256File(_frontExe), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Sha256File(_singBoxExe), Sha256File(_starExe), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Relay executable integrity check failed. Run Prepare Relay to repair the copies.");
             RelayCredentials creds = GetOrCreateCredentials();
             int internalPort = FindFreeInternalPort();
             WritePcConfigs(ip, creds, internalPort);
@@ -606,8 +625,11 @@ namespace BpsrRelayManager
             if (_tracked == null) return false;
             if (!ExpectedProcess(_tracked.starPid, _starExe, _tracked.starStartUtc) || !ExpectedProcess(_tracked.frontPid, _frontExe, _tracked.frontStartUtc))
             {
+                // A dead half must not leave the surviving process orphaned or reported healthy.
+                StopRelay();
                 _lastListenerHealthy = false;
-                _listenerDetail = "tracked relay process exited or changed";
+                _listenerDetail = "relay process exited; remaining owned process cleaned up";
+                Log("Relay process unexpectedly exited; remaining verified process stopped. Start Relay to reconnect.");
                 return false;
             }
             if ((DateTime.UtcNow - _lastListenerCheck).TotalSeconds < 10) return _lastListenerHealthy;
@@ -749,6 +771,7 @@ namespace BpsrRelayManager
             AddCheck(checks, "LAN IP", IsLocalIp(ip), ip, "Selected IP is not assigned to this PC.");
             AddCheck(checks, "Runtime", RuntimeReady(), InstalledRuntimeVersion() + " verified", "Run Prepare Relay first.");
             AddCheck(checks, "Android profile", GetProfilePcIp() == ip, "Current profile matches " + ip, "Run Prepare Relay to refresh the profile.");
+            AddCheck(checks, "Phone import", PhoneProfileConfirmed(), "Current SFA profile manually confirmed.", "Import the current profile in SFA and confirm it in Start Relay; a download alone is insufficient.");
             AddCheck(checks, "Duplicate relay processes", GetForeignRelayProcesses().Count == 0, "No extra relay process detected.", "Old/duplicate relay process found.");
             AddCheck(checks, "Firewall", FirewallReady(ip), "Private-LAN TCP+UDP rules ready.", "Click Allow Firewall.");
             if (!IsRelayRunning()) AddCheck(checks, "Relay port", CanBindTcp(ip, FrontPort) && CanBindUdp(ip, FrontPort), "TCP+UDP " + FrontPort + " free.", "Port " + FrontPort + " is already in use.");

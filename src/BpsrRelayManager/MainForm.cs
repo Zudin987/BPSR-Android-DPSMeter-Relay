@@ -209,7 +209,18 @@ namespace BpsrRelayManager
             _trayStop = new ToolStripMenuItem("Stop Relay"); _trayStop.Click += delegate { StopRelayGuided(); }; menu.Items.Add(_trayStop);
             menu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem exit = new ToolStripMenuItem("Exit Manager"); exit.Click += delegate { _forceExit = true; Close(); }; menu.Items.Add(exit);
-            ToolStripMenuItem stopExit = new ToolStripMenuItem("Stop Relay && Exit"); stopExit.Click += delegate { try { _engine.StopRelay(); } catch { } _forceExit = true; Close(); }; menu.Items.Add(stopExit);
+            ToolStripMenuItem stopExit = new ToolStripMenuItem("Stop Relay && Exit");
+            stopExit.Click += async delegate
+            {
+                if (_busy) return;
+                BeginSetupAction(_stop, "Stopping...", "Stopping relay before exit.");
+                bool stopped = false;
+                try { await Task.Run(delegate { _engine.StopRelay(); }); stopped = true; }
+                catch (Exception ex) { ShowFriendlyError("Could not stop relay", ex); }
+                finally { EndSetupAction(_stop, "Stop Relay"); }
+                if (stopped) { _forceExit = true; Close(); }
+            };
+            menu.Items.Add(stopExit);
             _notifyIcon.ContextMenuStrip = menu;
             _notifyIcon.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) RestoreFromTray(); };
             _notifyIcon.DoubleClick += delegate { RestoreFromTray(); };
@@ -345,8 +356,10 @@ namespace BpsrRelayManager
             catch (Exception ex) { ShowFriendlyError("Could not copy SFA link", ex); }
         }
 
-        private void StartRelayGuided()
+        private async void StartRelayGuided()
         {
+            if (_busy) return;
+            bool began = false;
             try
             {
                 string ip = SelectedIp();
@@ -358,11 +371,15 @@ namespace BpsrRelayManager
                     if (choice == DialogResult.Yes) { StartPhoneSetupGuided(); return; }
                     if (choice == DialogResult.No) _engine.MarkPhoneProfileConfirmed("user-confirmed-manual-import"); else return;
                 }
+                if (_profileServer != null && _profileServer.Running &&
+                    MessageBox.Show("Phone Setup is still available. Finished importing the current profile in SFA? Starting now will close the setup link.", "Finish phone setup", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 StopProfileServer();
-                _engine.StartRelay(ip);
+                BeginSetupAction(_start, "Starting...", "Starting StarSEA and the phone relay. Please wait.");
+                began = true;
+                await Task.Run(delegate { _engine.StartRelay(ip); });
             }
             catch (Exception ex) { ShowFriendlyError("Could not start relay", ex); }
-            finally { UpdateStatus(); }
+            finally { if (began) EndSetupAction(_start, "Start Relay"); else UpdateStatus(); }
         }
 
         private Form CreatePhoneSetupPrompt(bool downloaded)
@@ -395,21 +412,24 @@ namespace BpsrRelayManager
             return prompt;
         }
 
-        private void StopRelayGuided()
+        private async void StopRelayGuided()
         {
-            if (!_engine.IsRelayRunning()) return;
+            if (_busy || !_engine.IsRelayRunning()) return;
             if (MessageBox.Show("Stop the relay now?\r\n\r\nIf BPSR is using this relay, stopping it can interrupt the phone's game connection.", "Stop relay?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            try { _engine.StopRelay(); }
+            BeginSetupAction(_stop, "Stopping...", "Stopping and cleaning up the relay processes.");
+            try { await Task.Run(delegate { _engine.StopRelay(); }); }
             catch (Exception ex) { ShowFriendlyError("Could not stop relay", ex); }
-            finally { UpdateStatus(); }
+            finally { EndSetupAction(_stop, "Stop Relay"); }
         }
 
-        private void RestorePreviousGuided()
+        private async void RestorePreviousGuided()
         {
+            if (_busy) return;
             if (MessageBox.Show("Restore the previous verified sing-box runtime?\r\n\r\nThis is a troubleshooting action.", "Restore previous runtime?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            try { _engine.RestorePreviousRuntime(); }
+            BeginSetupAction(_rollback, "Restoring...", "Restoring the previous verified runtime.");
+            try { await Task.Run(delegate { _engine.RestorePreviousRuntime(); }); }
             catch (Exception ex) { ShowFriendlyError("Could not restore previous version", ex); }
-            finally { UpdateStatus(); }
+            finally { EndSetupAction(_rollback, "Restore Previous"); }
         }
 
         private void RunCheck()
@@ -556,7 +576,7 @@ namespace BpsrRelayManager
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
-            if (_busy && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; return; }
+            if (_busy) { e.Cancel = true; _forceExit = false; return; }
             if (_forceExit) { StopProfileServer(); return; }
             if (_engine.IsRelayRunning())
             {
