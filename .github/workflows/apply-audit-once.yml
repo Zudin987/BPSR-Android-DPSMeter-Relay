@@ -22,7 +22,7 @@ jobs:
         shell: powershell
         run: |
           $patch = Join-Path $env:GITHUB_WORKSPACE 'scripts\ApplyAuditRefactor.ps1'
-          $source = [System.IO.File]::ReadAllText($patch)
+          $source = [System.IO.File]::ReadAllText($patch).Replace("`r`n", "`n")
           $needle = "            AssertFrontPortFree(ip);`n            RelayCredentials creds = GetOrCreateCredentials();"
           $position = $source.IndexOf($needle, [StringComparison]::Ordinal)
           if ($position -lt 0 -or $source.IndexOf($needle, $position + $needle.Length, [StringComparison]::Ordinal) -ge 0) { throw 'Launch-integrity patch anchor missing or ambiguous.' }
