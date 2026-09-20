@@ -2,6 +2,12 @@ name: Field Test Package
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/field-test-package.yml
+      - src/BpsrRelayManager/**
+      - scripts/BuildNativeManager.ps1
+      - scripts/BuildRelease.ps1
   push:
     branches:
       - main
@@ -23,16 +29,12 @@ jobs:
         id: version
         shell: powershell
         run: |
-          $manager = Get-Content '.\scripts\BPSRRelayManager.ps1' -Raw
-          $match = [regex]::Match(
-            $manager,
-            '^\$ManagerVersion\s*=\s*''([^'']+)''',
-            [System.Text.RegularExpressions.RegexOptions]::Multiline
-          )
-          if (-not $match.Success) { throw 'Could not read ManagerVersion.' }
+          $versionSource = Get-Content '.\src\BpsrRelayManager\VersionInfo.cs' -Raw
+          $match = [regex]::Match($versionSource, 'public const string Version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw 'Could not read native manager version.' }
           $version = $match.Groups[1].Value.Trim()
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-            throw ('Invalid ManagerVersion: ' + $version)
+            throw ('Invalid native manager version: ' + $version)
           }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host ('Preparing field-test package for v' + $version + '.')
