@@ -77,7 +77,7 @@ namespace BpsrRelayManager
             if (!_selfTest)
             {
                 _timer = new Timer();
-                _timer.Interval = 3000;
+                _timer.Interval = 5000;
                 _timer.Tick += delegate { UpdateStatus(); };
                 _timer.Start();
                 UpdateStatus();
@@ -329,7 +329,7 @@ namespace BpsrRelayManager
                 if (_profileServer == null || !_profileServer.Running) throw new InvalidOperationException("Start Phone Setup first.");
                 string path = _engine.CreateQrHtml(_profileServer.SfaImportUrl);
                 Process.Start(path);
-                _engine.Log("Opened locally generated SFA-ready QR. No QR payload was sent to an external service.");
+                _engine.Log("Opened locally generated QR. Remote profile auto-update must be disabled in SFA after import; alternatively import the downloaded JSON as a local profile.");
             }
             catch (Exception ex) { ShowFriendlyError("Could not show SFA QR", ex); }
         }
@@ -345,8 +345,10 @@ namespace BpsrRelayManager
             catch (Exception ex) { ShowFriendlyError("Could not copy SFA link", ex); }
         }
 
-        private void StartRelayGuided()
+        private async void StartRelayGuided()
         {
+            if (_busy) return;
+            bool started = false;
             try
             {
                 string ip = SelectedIp();
@@ -359,10 +361,16 @@ namespace BpsrRelayManager
                     if (choice == DialogResult.No) _engine.MarkPhoneProfileConfirmed("user-confirmed-manual-import"); else return;
                 }
                 StopProfileServer();
-                _engine.StartRelay(ip);
+                BeginSetupAction(_start, "Starting...", "Starting both relay stages and validating local listeners...");
+                started = true;
+                await Task.Run(delegate { _engine.StartRelay(ip); });
             }
             catch (Exception ex) { ShowFriendlyError("Could not start relay", ex); }
-            finally { UpdateStatus(); }
+            finally
+            {
+                if (started) EndSetupAction(_start, "Start Relay");
+                else UpdateStatus();
+            }
         }
 
         private Form CreatePhoneSetupPrompt(bool downloaded)
@@ -395,28 +403,31 @@ namespace BpsrRelayManager
             return prompt;
         }
 
-        private void StopRelayGuided()
+        private async void StopRelayGuided()
         {
-            if (!_engine.IsRelayRunning()) return;
+            if (_busy || !_engine.IsRelayRunning()) return;
             if (MessageBox.Show("Stop the relay now?\r\n\r\nIf BPSR is using this relay, stopping it can interrupt the phone's game connection.", "Stop relay?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            try { _engine.StopRelay(); }
+            BeginSetupAction(_stop, "Stopping...", "Stopping both relay stages safely...");
+            try { await Task.Run(delegate { _engine.StopRelay(); }); }
             catch (Exception ex) { ShowFriendlyError("Could not stop relay", ex); }
-            finally { UpdateStatus(); }
+            finally { EndSetupAction(_stop, "Stop Relay"); }
         }
 
-        private void RestorePreviousGuided()
+        private async void RestorePreviousGuided()
         {
+            if (_busy) return;
             if (MessageBox.Show("Restore the previous verified sing-box runtime?\r\n\r\nThis is a troubleshooting action.", "Restore previous runtime?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            try { _engine.RestorePreviousRuntime(); }
+            BeginSetupAction(_rollback, "Restoring...", "Restoring and verifying the previous runtime...");
+            try { await Task.Run(delegate { _engine.RestorePreviousRuntime(); }); }
             catch (Exception ex) { ShowFriendlyError("Could not restore previous version", ex); }
-            finally { UpdateStatus(); }
+            finally { EndSetupAction(_rollback, "Restore Previous"); }
         }
 
         private void RunCheck()
         {
             try
             {
-                List<CheckResult> checks = _engine.GetPreflightChecks(SelectedIp());
+                List<CheckResult> checks = _engine.GetPreflightChecks(SelectedIp(), _profileServer != null && _profileServer.Running);
                 StringBuilder text = new StringBuilder(); int failures = 0;
                 foreach (CheckResult check in checks) { text.AppendLine("[" + check.State + "] " + check.Name + " - " + check.Detail); if (check.State == "FAIL") failures++; _engine.Log("[" + check.State + "] " + check.Name + " - " + check.Detail); }
                 MessageBox.Show(failures == 0 ? "Everything important looks ready.\r\n\r\nYou can click Start Relay." : text.ToString(), failures == 0 ? "Ready to use" : "One thing needs attention", MessageBoxButtons.OK, failures == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -457,7 +468,7 @@ namespace BpsrRelayManager
             bool running = _engine.IsRelayRunning();
             if (running)
             {
-                SetStatus(_relayState, "Running", _success); SetStatus(_runtimeState, "Ready", _success); SetStatus(_profileState, "Ready", _success); SetStatus(_firewallState, "Ready", _success); _nextAction.Text = "Relay is running. Start SFA on your phone if needed, then open BPSR and play."; SetButtonStates(true, true, true, true, false); SetOverallState("RELAY RUNNING", _success, _successSoft); SetRecommendedAction(null); UpdateTray(true); return;
+                SetStatus(_relayState, "Running", _success); SetStatus(_runtimeState, "Ready", _success); SetStatus(_profileState, _engine.PhoneProfileConfirmed() ? "Saved (phone not probed)" : "Not confirmed", _engine.PhoneProfileConfirmed() ? _success : _warning); SetStatus(_firewallState, "Ready", _success); _nextAction.Text = "Relay is running. Start SFA on your phone if needed, then open BPSR and play."; SetButtonStates(true, true, true, true, false); SetOverallState("RELAY RUNNING", _success, _successSoft); SetRecommendedAction(null); UpdateTray(true); return;
             }
             string ip = selectedIp;
             List<RelayProcessInfo> foreign = _engine.GetForeignRelayProcesses(); bool hasForeign = foreign.Count > 0;
