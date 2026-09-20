@@ -1,0 +1,87 @@
+name: PR25 One-Time Source Fix
+
+on:
+  push:
+    paths:
+      - .github/workflows/pr25-finalize-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.ref == 'refs/heads/fix/performance-functionality-audit'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Fix confirmed phone profile preservation and add native regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          engine_path = Path('src/BpsrRelayManager/RelayEngine.cs')
+          source = engine_path.read_text(encoding='utf-8')
+          old = '''        public void MarkPhoneProfileDownloaded()
+          {
+              string id = GetCurrentProfileId();
+              if (string.IsNullOrWhiteSpace(id)) return;
+              WriteJson(_phoneState, new PhoneProfileState { profileId = id, confirmedUtc = DateTime.UtcNow.ToString("o"), reason = "profile-downloaded" });
+          }'''
+          new = '''        public void MarkPhoneProfileDownloaded()
+          {
+              string id = GetCurrentProfileId();
+              // Repeated SFA downloads must not undo explicit confirmation for the same profile.
+              if (string.IsNullOrWhiteSpace(id) || PhoneProfileConfirmed()) return;
+              WriteJson(_phoneState, new PhoneProfileState { profileId = id, confirmedUtc = DateTime.UtcNow.ToString("o"), reason = "profile-downloaded" });
+          }'''
+          if source.count(old) != 1:
+              raise RuntimeError('Unexpected phone-download method; refuse to change the source')
+          engine_path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('src/BpsrRelayManager/WindowsApiSelfTest.cs')
+          source = test_path.read_text(encoding='utf-8')
+          old_call = '            TestNativeProfileServer();'
+          if source.count(old_call) != 1:
+              raise RuntimeError('Unexpected Windows self-test setup')
+          source = source.replace(old_call, old_call + '\n            TestPhoneProfileConfirmation();', 1)
+          marker = '        private static string HttpGet(string url, string method)'
+          if source.count(marker) != 1:
+              raise RuntimeError('Unexpected insertion point for phone confirmation regression')
+          test = '''        private static void TestPhoneProfileConfirmation()
+          {
+              string root = Path.Combine(Path.GetTempPath(), "bpsr-phone-confirmation-test-" + Guid.NewGuid().ToString("N"));
+              try
+              {
+                  RelayEngine engine = new RelayEngine(root, null);
+                  string meta = Path.Combine(root, "output", "profile-meta.json");
+                  File.WriteAllText(meta, "{\\"profileId\\":\\"profile-one\\",\\"pcIp\\":\\"192.0.2.10\\"}", new UTF8Encoding(false));
+                  if (engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Fresh phone profile incorrectly confirmed.");
+                  engine.MarkPhoneProfileDownloaded();
+                  if (engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Download incorrectly confirmed SFA import.");
+                  engine.MarkPhoneProfileConfirmed("user-confirmed-manual-import");
+                  if (!engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Manual import confirmation was lost.");
+                  engine.MarkPhoneProfileDownloaded();
+                  if (!engine.PhoneProfileConfirmed() || engine.PhoneProfileDownloaded())
+                      throw new InvalidOperationException("Repeated download revoked explicit SFA confirmation.");
+                  File.WriteAllText(meta, "{\\"profileId\\":\\"profile-two\\",\\"pcIp\\":\\"192.0.2.10\\"}", new UTF8Encoding(false));
+                  if (engine.PhoneProfileConfirmed()) throw new InvalidOperationException("Changed profile retained stale confirmation.");
+                  Console.WriteLine("NATIVE PHONE CONFIRMATION PASS: download is not import, repeat download preserves confirmation, profile identity change invalidates it.");
+              }
+              finally
+              {
+                  try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+              }
+          }
+
+          '''
+          test_path.write_text(source.replace(marker, test + marker, 1), encoding='utf-8')
+          PY
+          git rm .github/workflows/pr25-finalize-once.yml
+          git diff --check
+          git add src/BpsrRelayManager/RelayEngine.cs src/BpsrRelayManager/WindowsApiSelfTest.cs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: preserve confirmed SFA import after repeated profile downloads and test transitions"
+          git push origin HEAD:fix/performance-functionality-audit
