@@ -135,6 +135,16 @@ try {
     Assert-RelayTcpListener -ProcessId $backProcess.Id -Port $backPort -Label 'StarSEA smoke relay'
     Assert-RelayTcpListener -ProcessId $frontProcess.Id -Port $frontPort -Label 'BPSRMobileFront smoke relay'
 
+    # Exercise the same live two-stage processes over UDP before the TCP HTTP smoke.
+    $udpScript = Join-Path $scriptDir 'TestSocksUdp.ps1'
+    if (-not (Test-Path -LiteralPath $udpScript -PathType Leaf)) { throw 'Authenticated SOCKS5 UDP test missing.' }
+    & $udpScript -FrontPort $frontPort -Username $frontUsername -Password $frontPassword
+    if (-not $?) { throw 'Authenticated two-stage UDP smoke failed.' }
+    $frontProcess.Refresh()
+    $backProcess.Refresh()
+    if ($frontProcess.HasExited -or $backProcess.HasExited) { throw 'Relay exited during UDP smoke.' }
+    Write-Host ('LOCAL SYNTHETIC RESOURCE SNAPSHOT: front/back working set MB ' + [Math]::Round($frontProcess.WorkingSet64 / 1MB, 1) + '/' + [Math]::Round($backProcess.WorkingSet64 / 1MB, 1) + '; handles ' + $frontProcess.HandleCount + '/' + $backProcess.HandleCount + '. Not real gameplay benchmarking.')
+
     $curl = Get-Command curl.exe -ErrorAction Stop
     $url = 'http://127.0.0.1:' + $httpPort + '/' + $token + '/android-bpsr-relay.json'
     # A nonmatching explicit --noproxy overrides NO_PROXY/no_proxy from the runner;
@@ -162,7 +172,7 @@ try {
         throw 'Phone-profile confirmation marker did not match the downloaded profile.'
     }
 
-    Write-Host 'V4-COMPAT TCP RELAY SMOKE PASS: proxy bypass disabled; bad SOCKS credentials rejected; authenticated SOCKS client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target; exact phone-profile download confirmed. UDP forwarding is not covered by this test.'
+    Write-Host 'V4-COMPAT TCP+UDP RELAY SMOKE PASS: UDP ASSOCIATE/echo through both stages; proxy bypass disabled; bad SOCKS credentials rejected; authenticated TCP client -> BPSRMobileFront -> localhost StarSEA -> direct HTTP target; exact phone-profile download confirmed. Real Android gameplay and network performance are not covered.'
 }
 finally {
     foreach ($process in @($frontProcess, $backProcess, $httpProcess)) {
