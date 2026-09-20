@@ -1,0 +1,43 @@
+name: Finish Relay Audit Patch
+
+on:
+  push:
+    branches:
+      - fix/single-pr-relay-reliability-audit
+    paths:
+      - .github/workflows/finalize-audit-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Patch native relay and remove temporary tooling
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'scripts\FinalizeAuditPatch.ps1'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($patch, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          & $patch
+          git add -A
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(native): preserve phone readiness and add real UDP smoke regression'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git fetch origin fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git rebase origin/fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:fix/single-pr-relay-reliability-audit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
