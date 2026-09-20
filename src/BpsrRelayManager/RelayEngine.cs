@@ -203,7 +203,7 @@ namespace BpsrRelayManager
                             if (!File.Exists(path)) File.Copy(backup, path, false);
                             throw;
                         }
-                        finally { try { if (File.Exists(backup)) File.Delete(backup); } catch { } }
+                        finally { try { if (File.Exists(backup) && File.Exists(path)) File.Delete(backup); } catch { } }
                     }
                 }
                 else File.Move(temp, path);
