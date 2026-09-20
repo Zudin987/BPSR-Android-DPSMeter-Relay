@@ -1,0 +1,40 @@
+name: Apply PR25 audit edits once
+
+on:
+  push:
+    branches:
+      - fix/performance-functionality-audit
+    paths:
+      - .github/workflows/pr25-one-time-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'Zudin987/BPSR-Android-DPSMeter-Relay'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/performance-functionality-audit
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply fail-closed edits and commit real source changes
+        shell: pwsh
+        run: |
+          python scripts/ApplyAuditFixes.py
+          if ($LASTEXITCODE -ne 0) { throw 'One-time patch failed; no commit or push performed.' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/BpsrRelayManager/RelayEngine.cs src/BpsrRelayManager/MainForm.cs src/BpsrRelayManager/ProfileServer.cs
+          git rm -- scripts/ApplyAuditFixes.py .github/workflows/pr25-one-time-patch.yml
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patch whitespace validation failed.' }
+          git commit -m 'fix: apply second-audit runtime, lifecycle, UI and setup improvements'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to commit audit changes.' }
+          git push origin HEAD:fix/performance-functionality-audit
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to push audit changes.' }
