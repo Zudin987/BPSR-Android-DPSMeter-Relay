@@ -64,10 +64,12 @@ namespace BpsrRelayManager
 
         private void ServerLoop()
         {
-            bool served = false;
+            int downloads = 0;
             try
             {
-                while (!_stop && !served && DateTime.UtcNow < _deadline)
+                // Browsers may download the profile before SFA fetches it. A successful GET is
+                // NOT proof of import, and must not consume the one-time setup session.
+                while (!_stop && DateTime.UtcNow < _deadline)
                 {
                     TcpClient client = null;
                     try
@@ -105,14 +107,18 @@ namespace BpsrRelayManager
                                 WriteResponse(stream, 200, "OK", "application/json; charset=utf-8", body, headOnly);
                                 if (!headOnly)
                                 {
-                                    served = true;
+                                    downloads++;
                                     try { if (_onDownloaded != null && !string.IsNullOrWhiteSpace(_profileId)) _onDownloaded(); } catch { }
                                 }
                             }
                             else WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found"), headOnly);
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // A failed client request must not stop setup for the real phone.
+                        if (!_stop && _log != null) _log("Phone setup request failed: " + ex.GetType().Name);
+                    }
                     finally { if (client != null) try { client.Close(); } catch { } }
                 }
             }
@@ -120,23 +126,25 @@ namespace BpsrRelayManager
             {
                 try { if (_listener != null) _listener.Stop(); } catch { }
                 _running = false;
-                if (_log != null) _log(served ? "Phone profile downloaded; temporary setup server stopped." : "Phone setup link ended/expired.");
+                if (_log != null) _log("Phone setup link ended/expired. Profile downloads: " + downloads + ". Import into SFA must still be confirmed by the user.");
             }
         }
 
         private static string ReadRequest(NetworkStream stream)
         {
-            MemoryStream data = new MemoryStream();
-            byte[] buffer = new byte[4096];
-            while (data.Length < 16384)
+            using (MemoryStream data = new MemoryStream())
             {
-                int read = stream.Read(buffer, 0, buffer.Length);
-                if (read <= 0) break;
-                data.Write(buffer, 0, read);
-                string text = Encoding.ASCII.GetString(data.ToArray());
-                if (text.IndexOf("\r\n\r\n", StringComparison.Ordinal) >= 0) return text;
+                byte[] buffer = new byte[4096];
+                while (data.Length < 16384)
+                {
+                    int read = stream.Read(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+                    data.Write(buffer, 0, read);
+                    string text = Encoding.ASCII.GetString(data.ToArray());
+                    if (text.IndexOf("\r\n\r\n", StringComparison.Ordinal) >= 0) return text;
+                }
+                return Encoding.ASCII.GetString(data.ToArray());
             }
-            return Encoding.ASCII.GetString(data.ToArray());
         }
 
         private static void WriteResponse(NetworkStream stream, int status, string statusText, string contentType, byte[] body, bool headOnly)
