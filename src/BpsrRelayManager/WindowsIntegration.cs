@@ -9,9 +9,7 @@ using System.Runtime.InteropServices;
 
 namespace BpsrRelayManager
 {
-    // GetAdapterId returns a native GUID. Calling it through dynamic/IDispatch
-    // can fail with E_INVALIDARG while Automation tries to marshal the GUID.
-    // Use the SDK's INetworkConnection vtable order for this dual interface.
+    // GetAdapterId returns a native GUID. Avoid dynamic/IDispatch GUID marshaling.
     [ComImport]
     [Guid("DCB00005-570F-4A9B-8D69-199FDBA5723B")]
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
@@ -138,7 +136,7 @@ namespace BpsrRelayManager
                 if (actual != expected) continue;
                 dynamic network = connection.GetNetwork();
                 int category = (int)network.GetCategory();
-                if (category == 2) return;
+                if (category == 2) throw new InvalidOperationException("This PC uses a managed domain network. BPSR Relay only installs Private-profile firewall rules; switch to a trusted home/private LAN instead.");
                 if (category != 1) network.SetCategory(1);
                 return;
             }
@@ -159,8 +157,9 @@ namespace BpsrRelayManager
         public static bool FirewallReady(string ip, string adapterId)
         {
             if (string.IsNullOrWhiteSpace(ip) || string.IsNullOrWhiteSpace(adapterId)) return false;
-            string category = GetNetworkCategory(adapterId);
-            if (!string.Equals(category, "Private", StringComparison.OrdinalIgnoreCase) && !string.Equals(category, "DomainAuthenticated", StringComparison.OrdinalIgnoreCase)) return false;
+            // The installed rules are Private-only. DomainAuthenticated has a distinct Windows
+            // Firewall profile: accepting it here reported ready while traffic could be blocked.
+            if (!string.Equals(GetNetworkCategory(adapterId), "Private", StringComparison.OrdinalIgnoreCase)) return false;
             try
             {
                 dynamic policy = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FwPolicy2"));
@@ -206,7 +205,6 @@ namespace BpsrRelayManager
                 string ports = Convert.ToString(rule.LocalPorts) ?? string.Empty;
                 string local = Convert.ToString(rule.LocalAddresses) ?? string.Empty;
                 string remote = Convert.ToString(rule.RemoteAddresses) ?? string.Empty;
-                // Windows can return a single IPv4 address with an explicit host mask.
                 bool selectedHost = ContainsCsv(local, ip) || ContainsCsv(local, ip + "/32") || ContainsCsv(local, ip + "/255.255.255.255");
                 return ContainsCsv(ports, "10808") && selectedHost && (ContainsCsv(remote, "LocalSubnet") || ContainsCsv(remote, "LocalSubnet4"));
             }
