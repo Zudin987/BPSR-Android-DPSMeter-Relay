@@ -7,11 +7,29 @@ $exe = (Resolve-Path -LiteralPath $ManagerExe).Path
 $assembly = [System.Reflection.Assembly]::LoadFrom($exe)
 $type = $assembly.GetType('BpsrRelayManager.ProfileServer', $true)
 $binding = [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::NonPublic
-$ctor = @($type.GetConstructors($binding))[0]
 $start = $type.GetMethod('Start', $binding)
 $stop = $type.GetMethod('Stop', $binding)
 $running = $type.GetProperty('Running', $binding)
 $urlProperty = $type.GetProperty('ProfileUrl', $binding)
+
+# C# builds a CLR object[] directly: PowerShell reflection arguments otherwise sometimes
+# contain PSObject wrappers that cannot be converted to the internal string parameters.
+Add-Type -TypeDefinition @'
+using System;
+using System.Reflection;
+public static class NativeProfileFactory
+{
+    public static object Create(Type type, string ip, int port, string token, string path)
+    {
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var ctor = type.GetConstructor(flags, null, new Type[] {
+            typeof(string), typeof(int), typeof(string), typeof(string), typeof(string),
+            typeof(Action), typeof(Action<string>) }, null);
+        if (ctor == null) throw new InvalidOperationException("Native profile server constructor changed.");
+        return ctor.Invoke(new object[] { ip, port, token, path, "test-profile-id", null, null });
+    }
+}
+'@
 
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('bpsr-native-profile-test-' + [Guid]::NewGuid().ToString('N'))
 [void][System.IO.Directory]::CreateDirectory($temp)
@@ -27,21 +45,18 @@ $server = $null
 $stopped = $false
 
 try {
-    $arguments = [object[]]@('127.0.0.1', $port, $token, $path, 'test-profile-id', $null, $null)
-    $server = $ctor.Invoke($arguments)
+    $server = [NativeProfileFactory]::Create($type, '127.0.0.1', [int]$port, [string]$token, [string]$path)
     [void]$start.Invoke($server, $null)
     $url = [string]$urlProperty.GetValue($server, $null)
     if (-not [bool]$running.GetValue($server, $null)) { throw 'Native setup server did not start.' }
 
     $web = New-Object System.Net.WebClient
     try {
-        # Browsers and SFA can each fetch the same profile, in either order.
         foreach ($attempt in 1..2) {
             $body = $web.DownloadString($url)
             if ($body -ne $profile) { throw ('Native profile GET ' + $attempt + ' returned incorrect content.') }
             if (-not [bool]$running.GetValue($server, $null)) { throw ('Native setup server stopped after GET ' + $attempt + '.') }
         }
-
         $head = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
         $head.Method = 'HEAD'
         $response = $head.GetResponse()
