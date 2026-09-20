@@ -1,0 +1,29 @@
+name: Repair profile collection check (one time)
+on:
+  push:
+    branches: [fix/final-reliability-audit-v114]
+    paths: ['.github/workflows/fix-profile-array-once.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply one-line JSON collection compatibility fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/BpsrRelayManager/RelayEngine.cs')
+          s = p.read_text(encoding='utf-8-sig')
+          old = 'object[] outbounds = config["outbounds"] as object[];'
+          new = 'System.Collections.IList outbounds = config["outbounds"] as System.Collections.IList;'
+          assert s.count(old) == 1, 'Expected exact profile collection anchor'
+          p.write_text(s.replace(old, new), encoding='utf-8', newline='')
+          PY
+          git diff --check
+      - name: Commit source only
+        run: |
+          git add src/BpsrRelayManager/RelayEngine.cs
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: accept JavaScriptSerializer array collection for profile readiness'
+          git push origin HEAD:fix/final-reliability-audit-v114
