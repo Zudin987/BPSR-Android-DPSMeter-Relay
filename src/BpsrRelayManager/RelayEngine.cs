@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -48,6 +49,15 @@ namespace BpsrRelayManager
         public string ingress { get; set; }
         public string testedSingBoxVersion { get; set; }
         public string generatedUtc { get; set; }
+        public string voiceRoutingHash { get; set; }
+    }
+
+    internal sealed class VoiceRoutingOptions
+    {
+        public readonly List<string> Domains = new List<string>();
+        public readonly List<string> Cidrs = new List<string>();
+        public bool DirectUdp;
+        public bool Enabled { get { return Domains.Count > 0 || Cidrs.Count > 0 || DirectUdp; } }
     }
 
     internal sealed class PhoneProfileState
@@ -95,6 +105,7 @@ namespace BpsrRelayManager
         private readonly string _phoneState;
         private readonly string _logFile;
         private readonly string _qrHtml;
+        private readonly string _voiceRoutingFile;
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
         private Action<string> _logger;
         private PidState _tracked;
@@ -128,6 +139,7 @@ namespace BpsrRelayManager
             _phoneState = Path.Combine(_runtime, "phone-profile-state.json");
             _logFile = Path.Combine(_runtime, "manager.log");
             _qrHtml = Path.Combine(_output, "sfa-setup-qr.html");
+            _voiceRoutingFile = Path.Combine(_output, "voice-routing.txt");
             _logger = logger;
             EnsureDirectories();
             LoadTrackedState();
@@ -321,6 +333,84 @@ namespace BpsrRelayManager
                 credentials.internalUsername == "internal" && IsHex32(credentials.internalPassword);
         }
 
+
+        // Optional, user-supplied voice endpoint exceptions. Never guess a BPSR voice provider.
+        // No file (and comment-only files) retain the original game -> StarSEA routing.
+        public string GetVoiceRoutingFile()
+        {
+            if (!File.Exists(_voiceRoutingFile))
+            {
+                WriteTextAtomic(_voiceRoutingFile,
+                    "# Experimental voice-chat routing for Android SFA. All lines are optional.\r\n" +
+                    "# Only use endpoints confirmed to serve voice, not game combat.\r\n" +
+                    "# Examples (uncomment and REPLACE with real endpoints):\r\n" +
+                    "# domain:voice.example.net\r\n" +
+                    "# ip:203.0.113.50/32\r\n" +
+                    "# For testing ONLY, udp:direct sends ALL UDP directly from the phone.\r\n" +
+                    "# This may omit UDP game combat from your DPS meter.\r\n" +
+                    "# After changing this file, Stop Relay -> Prepare Relay -> reimport JSON into SFA.\r\n");
+            }
+            return _voiceRoutingFile;
+        }
+
+        private string CurrentVoiceRoutingHash()
+        {
+            return File.Exists(_voiceRoutingFile) ? Sha256File(_voiceRoutingFile) : string.Empty;
+        }
+
+        private VoiceRoutingOptions ReadVoiceRouting()
+        {
+            VoiceRoutingOptions result = new VoiceRoutingOptions();
+            if (!File.Exists(_voiceRoutingFile)) return result;
+            string[] lines = File.ReadAllLines(_voiceRoutingFile, Encoding.UTF8);
+            if (lines.Length > 256) throw new InvalidOperationException("Voice-routing file is too long.");
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                if (string.Equals(line, "udp:direct", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.DirectUdp = true;
+                }
+                else if (line.StartsWith("domain:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string domain = line.Substring(7).Trim().ToLowerInvariant().TrimStart('.');
+                    if (!Regex.IsMatch(domain, @"^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$") || domain.EndsWith(".example.net", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Invalid voice domain: " + line);
+                    if (!result.Domains.Contains(domain)) result.Domains.Add(domain);
+                }
+                else if (line.StartsWith("ip:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string cidr = line.Substring(3).Trim();
+                    string[] parts = cidr.Split('/');
+                    IPAddress address;
+                    int prefix;
+                    if (parts.Length != 2 || !IPAddress.TryParse(parts[0], out address) ||
+                        address.AddressFamily != AddressFamily.InterNetwork ||
+                        !int.TryParse(parts[1], out prefix) || prefix < 24 || prefix > 32)
+                        throw new InvalidOperationException("Voice IP must be an IPv4 CIDR /24-/32: " + line);
+                    if (!result.Cidrs.Contains(cidr)) result.Cidrs.Add(cidr);
+                }
+                else throw new InvalidOperationException("Unknown voice-routing entry: " + line);
+                if (result.Cidrs.Count + result.Domains.Count > 32)
+                    throw new InvalidOperationException("Limit voice routing to 32 specific domain/IP entries.");
+            }
+            return result;
+        }
+
+        private object[] BuildAndroidVoiceRules(VoiceRoutingOptions voice)
+        {
+            List<object> rules = new List<object>();
+            rules.Add(Dict("port", 53, "action", "hijack-dns"));
+            if (voice.Domains.Count > 0)
+                rules.Add(Dict("domain_suffix", voice.Domains.ToArray(), "action", "route", "outbound", "voice-direct"));
+            if (voice.Cidrs.Count > 0)
+                rules.Add(Dict("ip_cidr", voice.Cidrs.ToArray(), "action", "route", "outbound", "voice-direct"));
+            if (voice.DirectUdp)
+                rules.Add(Dict("network", "udp", "action", "route", "outbound", "voice-direct"));
+            return rules.ToArray();
+        }
+
         public bool ProfileReady(string ip)
         {
             try
@@ -330,15 +420,22 @@ namespace BpsrRelayManager
                 if (meta == null || string.IsNullOrWhiteSpace(meta.profileId) || meta.pcIp != ip ||
                     !File.Exists(_androidConfig) || !ValidCredentials(creds)) return false;
                 if (!string.Equals(meta.profileId, Sha256File(_androidConfig), StringComparison.OrdinalIgnoreCase)) return false;
+                if (!string.Equals(meta.voiceRoutingHash ?? string.Empty, CurrentVoiceRoutingHash(), StringComparison.OrdinalIgnoreCase)) return false;
+                VoiceRoutingOptions voice = ReadVoiceRouting();
                 string profile = File.ReadAllText(_androidConfig, Encoding.UTF8);
                 // Parse values, rather than scanning JSON text, to avoid accepting stale or
                 // unrelated credentials present in another field.
                 Dictionary<string, object> config = _json.Deserialize<Dictionary<string, object>>(profile);
                 if (config == null || !config.ContainsKey("outbounds")) return false;
                 System.Collections.IList outbounds = config["outbounds"] as System.Collections.IList;
-                if (outbounds == null || outbounds.Count != 1) return false;
+                if (outbounds == null || outbounds.Count != (voice.Enabled ? 2 : 1)) return false;
                 Dictionary<string, object> outbound = outbounds[0] as Dictionary<string, object>;
                 if (outbound == null) return false;
+                if (voice.Enabled)
+                {
+                    Dictionary<string, object> extra = outbounds[1] as Dictionary<string, object>;
+                    if (extra == null || Convert.ToString(extra["type"]) != "direct" || Convert.ToString(extra["tag"]) != "voice-direct") return false;
+                }
                 return Convert.ToString(outbound["type"]) == "socks" &&
                     Convert.ToString(outbound["server"]) == ip &&
                     Convert.ToInt32(outbound["server_port"]) == FrontPort &&
@@ -488,21 +585,26 @@ namespace BpsrRelayManager
             string oldId = GetCurrentProfileId();
             bool oldConfirmed = PhoneProfileConfirmed();
             int internalPort = FindFreeInternalPort();
+            VoiceRoutingOptions voice = ReadVoiceRouting();
             WritePcConfigs(ip, credentials, internalPort);
 
             Dictionary<string, object> android = new Dictionary<string, object>();
             android["log"] = Dict("disabled", true, "level", "error");
             android["dns"] = Dict("servers", new object[] { Dict("type", "local", "tag", "local") }, "strategy", "ipv4_only", "final", "local");
             android["inbounds"] = new object[] { Dict("type", "tun", "tag", "tun-in", "address", new object[] { "172.19.0.1/30" }, "auto_route", true, "route_exclude_address", new object[] { ip + "/32" }, "stack", "system") };
-            android["outbounds"] = new object[] { Dict("type", "socks", "tag", "bpsr-pc", "server", ip, "server_port", FrontPort, "version", "5", "username", credentials.frontUsername, "password", credentials.frontPassword) };
-            android["route"] = Dict("rules", new object[] { Dict("port", 53, "action", "hijack-dns") }, "final", "bpsr-pc");
+            List<object> androidOutbounds = new List<object>();
+            androidOutbounds.Add(Dict("type", "socks", "tag", "bpsr-pc", "server", ip, "server_port", FrontPort, "version", "5", "username", credentials.frontUsername, "password", credentials.frontPassword));
+            if (voice.Enabled) androidOutbounds.Add(Dict("type", "direct", "tag", "voice-direct"));
+            android["outbounds"] = androidOutbounds.ToArray();
+            android["route"] = Dict("rules", BuildAndroidVoiceRules(voice), "final", "bpsr-pc");
             WriteTextAtomic(_androidConfig, _json.Serialize(android));
             string profileId = Sha256File(_androidConfig);
-            WriteJson(_profileMeta, new ProfileMeta { managerVersion = VersionInfo.Version, profileId = profileId, pcIp = ip, relayPort = FrontPort, internalPort = internalPort, ingress = "v4-compatible-socks5", testedSingBoxVersion = VersionInfo.TestedSingBoxVersion, generatedUtc = DateTime.UtcNow.ToString("o") });
+            WriteJson(_profileMeta, new ProfileMeta { managerVersion = VersionInfo.Version, profileId = profileId, pcIp = ip, relayPort = FrontPort, internalPort = internalPort, ingress = "v4-compatible-socks5", testedSingBoxVersion = VersionInfo.TestedSingBoxVersion, generatedUtc = DateTime.UtcNow.ToString("o"), voiceRoutingHash = CurrentVoiceRoutingHash() });
             if (oldConfirmed && !string.IsNullOrWhiteSpace(oldId) && string.Equals(oldId, profileId, StringComparison.OrdinalIgnoreCase)) MarkPhoneProfileConfirmed("preserved-unchanged-profile");
             else try { if (File.Exists(_phoneState)) File.Delete(_phoneState); } catch { }
 
             string notes = "BPSR Android DPSMeter Relay\r\n\r\nPC LAN IPv4 in this profile: " + ip + "\r\nPhone relay port: " + FrontPort + "\r\n\r\nSFA:\r\n- Use per-app mode / Proxy selected apps.\r\n- Select BPSR only.\r\n- Start SFA after Start Relay on the PC.\r\n\r\nDPS meter:\r\n- Universal capture target: StarSEA\r\n- Do NOT target BPSRMobileFront.\r\n\r\nTransport:\r\n- Android -> BPSRMobileFront -> localhost StarSEA -> game server.\r\n- Phone -> PC uses authenticated SOCKS5 on your trusted Private LAN.\r\n- Do not port-forward relay port " + FrontPort + ".\r\n";
+            if (voice.Enabled) notes += "\r\nEXPERIMENTAL VOICE ROUTING ENABLED: specified voice endpoints bypass StarSEA.\r\n" + (voice.DirectUdp ? "WARNING: ALL UDP bypasses StarSEA; UDP combat may be absent from DPS.\r\n" : "") + "Voice bypass changes require SFA profile reimport.\r\n";
             WriteTextAtomic(Path.Combine(_output, "IMPORT-THIS-PROFILE.txt"), notes);
         }
 
@@ -536,7 +638,7 @@ namespace BpsrRelayManager
             CheckSingBoxConfig(_frontConfig);
             CheckSingBoxConfig(_starConfig);
             CheckSingBoxConfig(_androidConfig);
-            Log("Config validation passed: two-stage SOCKS5 topology, no sniffing/multiplex, one StarSEA game-server path.");
+            Log("Config validation passed: two-stage SOCKS5 topology, no sniffing/multiplex; optional phone-side voice exceptions checked.");
         }
 
         private void AssertTopology(string ip)
@@ -553,6 +655,13 @@ namespace BpsrRelayManager
             RequireContains(android, "\"final\":\"bpsr-pc\"");
             RequireContains(android, "route_exclude_address");
             RequireContains(android, ip + "/32");
+            VoiceRoutingOptions voice = ReadVoiceRouting();
+            if (voice.Enabled)
+            {
+                RequireContains(android, "\"tag\":\"voice-direct\"");
+                RequireContains(android, "\"outbound\":\"voice-direct\"");
+                if (voice.DirectUdp) RequireContains(android, "\"network\":\"udp\"");
+            }
             if (all.IndexOf("shadowsocks", StringComparison.OrdinalIgnoreCase) >= 0 || all.IndexOf("multiplex", StringComparison.OrdinalIgnoreCase) >= 0 || all.IndexOf("\"action\":\"sniff\"", StringComparison.OrdinalIgnoreCase) >= 0 || android.IndexOf("strict_route", StringComparison.OrdinalIgnoreCase) >= 0) throw new InvalidOperationException("Topology validation found a forbidden relay option.");
         }
 
@@ -966,6 +1075,16 @@ namespace BpsrRelayManager
             ValidateGeneratedConfigs("192.0.2.10");
             string android = File.ReadAllText(_androidConfig);
             if (android.IndexOf("route_exclude_address", StringComparison.Ordinal) < 0 || android.IndexOf("\"final\":\"bpsr-pc\"", StringComparison.Ordinal) < 0) throw new InvalidOperationException("Native self-test found a broken Android relay route.");
+            if (!ProfileReady("192.0.2.10")) throw new InvalidOperationException("Default relay profile failed readiness test.");
+            WriteTextAtomic(GetVoiceRoutingFile(), "domain:voice.example.org\r\nip:203.0.113.10/32\r\n");
+            WriteRelayConfigs("192.0.2.10", credentials);
+            ValidateGeneratedConfigs("192.0.2.10");
+            if (!ProfileReady("192.0.2.10")) throw new InvalidOperationException("Selective voice routing profile failed readiness test.");
+            WriteTextAtomic(GetVoiceRoutingFile(), "udp:direct\r\n");
+            if (ProfileReady("192.0.2.10")) throw new InvalidOperationException("Edited voice routing did not invalidate stale SFA profile.");
+            WriteRelayConfigs("192.0.2.10", credentials);
+            ValidateGeneratedConfigs("192.0.2.10");
+            if (!ProfileReady("192.0.2.10")) throw new InvalidOperationException("Experimental direct-UDP profile failed readiness test.");
         }
 
         private static Process SafeGetProcess(int pid) { try { return Process.GetProcessById(pid); } catch { return null; } }
