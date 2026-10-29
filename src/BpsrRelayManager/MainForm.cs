@@ -180,7 +180,9 @@ namespace BpsrRelayManager
             Button dps = UiButton("Copy DPS Notes", 142, 32, 130, 31, false, false); dps.Click += delegate { CopyDpsNotes(); }; tools.Controls.Add(dps);
             _detailsStop = UiButton("Stop Relay", 280, 32, 108, 31, false, true); _detailsStop.Click += delegate { StopRelayGuided(); }; tools.Controls.Add(_detailsStop);
             _rollback = UiButton("Restore Previous", 396, 32, 150, 31, false, false); _rollback.Click += delegate { RestorePreviousGuided(); }; tools.Controls.Add(_rollback);
-            Button folder = UiButton("Open Profile Folder", 554, 32, 150, 31, false, false); folder.Click += delegate { try { Process.Start(_engine.OutputDirectory); } catch (Exception ex) { ShowFriendlyError("Could not open folder", ex); } }; tools.Controls.Add(folder); _detailsTab.Controls.Add(tools);
+            Button folder = UiButton("Open Profile Folder", 554, 32, 150, 31, false, false); folder.Click += delegate { try { Process.Start(_engine.OutputDirectory); } catch (Exception ex) { ShowFriendlyError("Could not open folder", ex); } }; tools.Controls.Add(folder);
+            Button voice = UiButton("Voice Routing", 710, 32, 124, 31, false, false); voice.Click += delegate { try { Process.Start("notepad.exe", "\"" + _engine.GetVoiceRoutingFile() + "\""); } catch (Exception ex) { ShowFriendlyError("Could not open voice routing", ex); } }; tools.Controls.Add(voice); _detailsTab.Controls.Add(tools);
+            _toolTip.SetToolTip(voice, "Experimental voice bypass: edit known voice destinations, then Prepare Relay and reimport SFA profile.");
             Panel logs = Card(22, 162, 850, 332); logs.Controls.Add(MakeLabel("Logs", 14, 11, 100, 22, 10f, true, _text));
             _log = new TextBox(); _log.Location = new Point(14, 39); _log.Size = new Size(820, 278); _log.Multiline = true; _log.ReadOnly = true; _log.ScrollBars = ScrollBars.Vertical; _log.Font = new Font("Consolas", 9f); _log.BackColor = _surfaceSoft; _log.BorderStyle = BorderStyle.FixedSingle; logs.Controls.Add(_log); _detailsTab.Controls.Add(logs);
             _detailsTab.Controls.Add(MakeLabel("No profile password or relay credential is included when you copy the report.", 24, 506, 800, 22, 9f, false, _muted));
@@ -195,7 +197,7 @@ namespace BpsrRelayManager
             android.Controls.Add(MakeLabel(left, 16, 43, 390, 166, 9.25f, false, _neutral)); android.Controls.Add(MakeLabel(right, 426, 43, 405, 166, 9.25f, false, _neutral)); _helpTab.Controls.Add(android);
             Panel daily = Card(22, 296, 850, 80); AddCardTitle(daily, "Next time", 10); daily.Controls.Add(MakeLabel("Normally: Start Relay on PC -> Start SFA on phone -> Open BPSR. Use Minimize to Tray if you want the manager out of the taskbar.", 16, 40, 814, 28, 9.25f, false, _neutral)); _helpTab.Controls.Add(daily);
             Panel meter = Card(22, 388, 850, 80); AddCardTitle(meter, "DPS meter", 10); meter.Controls.Add(MakeLabel("Universal capture/process target: StarSEA. BPSRMobileFront is only the phone-facing relay process.", 16, 40, 814, 28, 9.25f, false, _neutral)); _helpTab.Controls.Add(meter);
-            Panel problem = Card(22, 480, 850, 58); problem.Controls.Add(MakeLabel("If the phone cannot connect, re-check Private network + firewall. If the meter has no data, verify StarSEA is the target.", 16, 18, 814, 24, 9.25f, false, _neutral)); _helpTab.Controls.Add(problem);
+            Panel problem = Card(22, 480, 850, 78); problem.Controls.Add(MakeLabel("If the phone cannot connect, re-check Private network + firewall. If the meter has no data, verify StarSEA is the target.\r\nVoice chat issues: Details > Voice Routing. Exceptions are experimental; regenerate and reimport SFA profile after changes.", 16, 12, 814, 55, 9.25f, false, _neutral)); _helpTab.Controls.Add(problem);
         }
 
         private void BuildTray()
