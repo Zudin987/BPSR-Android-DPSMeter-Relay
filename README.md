@@ -25,6 +25,23 @@ Windows helper that forwards **Blue Protocol: Star Resonance combat traffic from
 
 For daily use: **Start Relay on PC → Start SFA on phone → Open BPSR**. The manager's tray menu can reopen it, start or stop the relay, or exit.
 
+## Experimental voice-chat compatibility
+
+SFA's per-app mode routes **the whole BPSR app**, not just combat traffic. Some users report in-game voice-chat problems while the relay is active. No BPSR voice-server IPs/domains have been independently verified, so **the default is unchanged** and no guessed voice endpoints are bypassed.
+
+To try a *selective* exception, use **Details → Voice Routing** in the manager. It opens `output/voice-routing.txt`. Add only destinations **verified** to carry voice, one per line:
+
+```text
+domain:voice.your-verified-provider.example
+ip:203.0.113.50/32
+```
+
+The examples are placeholders, not actual BPSR destinations. Domain entries match that domain and its subdomains; IP entries must be narrow IPv4 CIDRs (/24 through /32). Matched connections go directly from the phone instead of through StarSEA. Everything else still goes through the PC relay. Note that domain matching depends on DNS visibility; IP CIDRs can be more dependable for IP-only connections.
+
+**Last-resort test only:** Add `udp:direct` to bypass **all UDP** (except DNS handled by SFA). This may restore UDP-based voice but could hide UDP gameplay from the DPS meter, so **do not assume DPS completeness**. Remove that line if combat tracking changes.
+
+After any edit: **Stop Relay → Prepare Relay → reimport the generated JSON as a local profile in SFA → Start Relay → restart SFA and BPSR**. The manager rejects stale profiles when the routing file changes. Compare voice and DPS with and without the bypass; a Windows UDP smoke test does not prove real Android voice compatibility. Do not publish a stable release without real-device testing.
+
 ## Important network safety
 
 - Use this tool **only on a trusted home/private LAN**. Never port-forward port `10808`.
